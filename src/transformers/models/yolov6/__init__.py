@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING
 from ...utils import OptionalDependencyNotAvailable, _LazyModule, is_torch_available, is_vision_available
 
 
-_import_structure = {"configuration_yolov6": ["YOLOV6_PRETRAINED_CONFIG_ARCHIVE_MAP", "Yolov6Config", "Yolov6OnnxConfig"]}
+_import_structure = {
+    "configuration_yolov6": ["YOLOV6_PRETRAINED_CONFIG_ARCHIVE_MAP", "Yolov6Config", "Yolov6OnnxConfig"]
+}
 
 try:
     if not is_vision_available():
@@ -33,7 +35,7 @@ try:
 except OptionalDependencyNotAvailable:
     pass
 else:
-    _import_structure["modeling_yolos"] = [
+    _import_structure["modeling_yolov6"] = [
         "YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST",
         "Yolov6ForObjectDetection",
         "Yolov6Model",

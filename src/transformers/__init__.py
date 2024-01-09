@@ -936,6 +936,7 @@ _import_structure = {
     "models.xlnet": ["XLNET_PRETRAINED_CONFIG_ARCHIVE_MAP", "XLNetConfig"],
     "models.xmod": ["XMOD_PRETRAINED_CONFIG_ARCHIVE_MAP", "XmodConfig"],
     "models.yolos": ["YOLOS_PRETRAINED_CONFIG_ARCHIVE_MAP", "YolosConfig"],
+    "models.yolov6": ["YOLOV6_PRETRAINED_CONFIG_ARCHIVE_MAP", "Yolov6Config"],
     "models.yoso": ["YOSO_PRETRAINED_CONFIG_ARCHIVE_MAP", "YosoConfig"],
     "onnx": [],
     "pipelines": [
@@ -1294,6 +1295,7 @@ else:
     _import_structure["models.vitmatte"].append("VitMatteImageProcessor")
     _import_structure["models.vivit"].append("VivitImageProcessor")
     _import_structure["models.yolos"].extend(["YolosFeatureExtractor", "YolosImageProcessor"])
+    _import_structure["models.yolov6"].extend(["Yolov6FeatureExtractor", "Yolov6ImageProcessor"])
 
 
 # PyTorch-backed objects
@@ -3600,6 +3602,14 @@ else:
             "YolosForObjectDetection",
             "YolosModel",
             "YolosPreTrainedModel",
+        ]
+    )
+    _import_structure["models.yolov6"].extend(
+        [
+            "YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST",
+            "Yolov6ForObjectDetection",
+            "Yolov6Model",
+            "Yolov6PreTrainedModel",
         ]
     )
     _import_structure["models.yoso"].extend(
@@ -5955,6 +5965,7 @@ if TYPE_CHECKING:
         from .models.vitmatte import VitMatteImageProcessor
         from .models.vivit import VivitImageProcessor
         from .models.yolos import YolosFeatureExtractor, YolosImageProcessor
+        from .models.yolov6 import Yolov6FeatureExtractor, Yolov6ImageProcessor
 
     # Modeling
     try:
@@ -7847,6 +7858,12 @@ if TYPE_CHECKING:
             YolosForObjectDetection,
             YolosModel,
             YolosPreTrainedModel,
+        )
+        from .models.yolov6 import (
+            YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST,
+            Yolov6ForObjectDetection,
+            Yolov6Model,
+            Yolov6PreTrainedModel,
         )
         from .models.yoso import (
             YOSO_PRETRAINED_MODEL_ARCHIVE_LIST,

@@ -246,5 +246,6 @@ from . import (
     xlnet,
     xmod,
     yolos,
+    yolov6,
     yoso,
 )

@@ -41,6 +41,7 @@ from ...utils import (
 )
 from .configuration_yolov6 import Yolov6Config
 
+
 if is_scipy_available():
     from scipy.optimize import linear_sum_assignment
 
@@ -108,51 +109,9 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
     loss_dict: Optional[Dict] = None
     logits: torch.FloatTensor = None
     pred_boxes: torch.FloatTensor = None
-    auxiliary_outputs: Optional[List[Dict]] = None
     last_hidden_state: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
-
-
-class ConvModule(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        stride: int,
-        activation_type,
-        padding=None,
-        groups=1,
-        bias=False,
-    ):
-        super().__init__()
-        if padding is None:
-            padding = kernel_size // 2
-        self.conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            groups=groups,
-            bias=bias,
-        )
-        self.normalization = nn.BatchNorm2d(out_channels)
-        self.activation = (
-            ACT2FN[activation_type] if activation_type is not None else nn.Identity()
-        )
-
-    def forward(self, input: Tensor) -> Tensor:
-        hidden_state = self.convolution(input)
-        hidden_state = self.normalization(hidden_state)
-        hidden_state = self.activation(hidden_state)
-        return hidden_state
-
-    def forward_fuse(self, input: Tensor) -> Tensor:
-        hidden_state = self.convolution(input)
-        hidden_state = self.activation(hidden_state)
-        return hidden_state
 
 
 def dist2bbox(distance, anchor_points, box_format="xyxy"):
@@ -193,16 +152,10 @@ def generate_anchors(
             anchor_point = torch.stack([shift_x, shift_y], axis=-1).to(torch.float)
             if mode == "af":  # anchor-free
                 anchor_points.append(anchor_point.reshape([-1, 2]))
-                stride_tensor.append(
-                    torch.full((h * w, 1), stride, dtype=torch.float, device=device)
-                )
+                stride_tensor.append(torch.full((h * w, 1), stride, dtype=torch.float, device=device))
             elif mode == "ab":  # anchor-based
                 anchor_points.append(anchor_point.reshape([-1, 2]).repeat(3, 1))
-                stride_tensor.append(
-                    torch.full(
-                        (h * w, 1), stride, dtype=torch.float, device=device
-                    ).repeat(3, 1)
-                )
+                stride_tensor.append(torch.full((h * w, 1), stride, dtype=torch.float, device=device).repeat(3, 1))
         anchor_points = torch.cat(anchor_points)
         stride_tensor = torch.cat(stride_tensor)
         return anchor_points, stride_tensor
@@ -226,9 +179,7 @@ def generate_anchors(
                 .clone()
                 .to(feats[0].dtype)
             )
-            anchor_point = (
-                torch.stack([shift_x, shift_y], axis=-1).clone().to(feats[0].dtype)
-            )
+            anchor_point = torch.stack([shift_x, shift_y], axis=-1).clone().to(feats[0].dtype)
 
             if mode == "af":  # anchor-free
                 anchors.append(anchor.reshape([-1, 4]))
@@ -237,17 +188,57 @@ def generate_anchors(
                 anchors.append(anchor.reshape([-1, 4]).repeat(3, 1))
                 anchor_points.append(anchor_point.reshape([-1, 2]).repeat(3, 1))
             num_anchors_list.append(len(anchors[-1]))
-            stride_tensor.append(
-                torch.full([num_anchors_list[-1], 1], stride, dtype=feats[0].dtype)
-            )
+            stride_tensor.append(torch.full([num_anchors_list[-1], 1], stride, dtype=feats[0].dtype))
         anchors = torch.cat(anchors)
         anchor_points = torch.cat(anchor_points).to(device)
         stride_tensor = torch.cat(stride_tensor).to(device)
         return anchors, anchor_points, num_anchors_list, stride_tensor
 
 
-class RepVGGBlock(nn.Module):
-    """RepVGGBlock is a basic rep-style block, including training and deploy status
+class Yolov6ConvLayer(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int,
+        stride: int,
+        activation_type: str,
+        padding=None,
+        groups=1,
+        bias=False,
+    ):
+        super().__init__()
+        if padding is None:
+            padding = kernel_size // 2
+        self.convolution = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
+            bias=bias,
+        )
+        self.normalization = nn.BatchNorm2d(out_channels)
+        self.activation_type = activation_type
+        self.activation = ACT2FN[activation_type] if activation_type is not None else nn.Identity()
+
+    def forward(self, input: Tensor) -> Tensor:
+        hidden_state = self.convolution(input)
+        hidden_state = self.normalization(hidden_state)
+        if self.activation_type is not None:
+            hidden_state = self.activation(hidden_state)
+        return hidden_state
+
+    def forward_fuse(self, input: Tensor) -> Tensor:
+        hidden_state = self.convolution(input)
+        if self.activation_type is not None:
+            hidden_state = self.activation(hidden_state)
+        return hidden_state
+
+
+class Yolov6RepVGGBlock(nn.Module):
+    """Yolov6RepVGGBlock is a basic rep-style block, including training and deploy status
     This code is based on https://github.com/DingXiaoH/RepVGG/blob/main/repvgg.py
     """
 
@@ -264,7 +255,7 @@ class RepVGGBlock(nn.Module):
         deploy=False,
         use_se=False,
     ):
-        super(RepVGGBlock, self).__init__()
+        super(Yolov6RepVGGBlock, self).__init__()
         """ Initialization of the class.
         Args:
             in_channels (int): Number of channels in the input image
@@ -312,11 +303,9 @@ class RepVGGBlock(nn.Module):
 
         else:
             self.rbr_identity = (
-                nn.BatchNorm2d(num_features=in_channels)
-                if out_channels == in_channels and stride == 1
-                else None
+                nn.BatchNorm2d(num_features=in_channels) if out_channels == in_channels and stride == 1 else None
             )
-            self.rbr_dense = ConvModule(
+            self.rbr_dense = Yolov6ConvLayer(
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=kernel_size,
@@ -325,7 +314,7 @@ class RepVGGBlock(nn.Module):
                 padding=padding,
                 groups=groups,
             )
-            self.rbr_1x1 = ConvModule(
+            self.rbr_1x1 = Yolov6ConvLayer(
                 in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=1,
@@ -345,9 +334,7 @@ class RepVGGBlock(nn.Module):
         else:
             id_out = self.rbr_identity(inputs)
 
-        return self.nonlinearity(
-            self.se(self.rbr_dense(inputs) + self.rbr_1x1(inputs) + id_out)
-        )
+        return self.nonlinearity(self.se(self.rbr_dense(inputs) + self.rbr_1x1(inputs) + id_out))
 
     def get_equivalent_kernel_bias(self):
         kernel3x3, bias3x3 = self._fuse_bn_tensor(self.rbr_dense)
@@ -364,9 +351,7 @@ class RepVGGBlock(nn.Module):
         kernel_size = avgp.kernel_size
         input_dim = channels // groups
         k = torch.zeros((channels, input_dim, kernel_size, kernel_size))
-        k[np.arange(channels), np.tile(np.arange(input_dim), groups), :, :] = (
-            1.0 / kernel_size**2
-        )
+        k[np.arange(channels), np.tile(np.arange(input_dim), groups), :, :] = 1.0 / kernel_size**2
         return k
 
     def _pad_1x1_to_3x3_tensor(self, kernel1x1):
@@ -378,16 +363,14 @@ class RepVGGBlock(nn.Module):
     def _fuse_bn_tensor(self, branch):
         if branch is None:
             return 0, 0
-        if isinstance(branch, ConvModule):
+        if isinstance(branch, Yolov6ConvLayer):
             kernel = branch.conv.weight
             bias = branch.conv.bias
             return kernel, bias
         elif isinstance(branch, nn.BatchNorm2d):
             if not hasattr(self, "id_tensor"):
                 input_dim = self.in_channels // self.groups
-                kernel_value = np.zeros(
-                    (self.in_channels, input_dim, 3, 3), dtype=np.float32
-                )
+                kernel_value = np.zeros((self.in_channels, input_dim, 3, 3), dtype=np.float32)
                 for i in range(self.in_channels):
                     kernel_value[i, i % input_dim, 1, 1] = 1
                 self.id_tensor = torch.from_numpy(kernel_value).to(branch.weight.device)
@@ -428,10 +411,8 @@ class RepVGGBlock(nn.Module):
         self.deploy = True
 
 
-class BottleRep(nn.Module):
-    def __init__(
-        self, in_channels, out_channels, basic_block=RepVGGBlock, weight=False
-    ):
+class Yolov6BottleRep(nn.Module):
+    def __init__(self, in_channels, out_channels, basic_block=Yolov6RepVGGBlock, weight=False):
         super().__init__()
         self.conv1 = basic_block(in_channels, out_channels)
         self.conv2 = basic_block(out_channels, out_channels)
@@ -450,33 +431,9 @@ class BottleRep(nn.Module):
         return outputs + self.alpha * x if self.shortcut else outputs
 
 
-class BottleRep3(nn.Module):
-    def __init__(
-        self, in_channels, out_channels, basic_block=RepVGGBlock, weight=False
-    ):
-        super().__init__()
-        self.conv1 = basic_block(in_channels, out_channels)
-        self.conv2 = basic_block(out_channels, out_channels)
-        self.conv3 = basic_block(out_channels, out_channels)
-        if in_channels != out_channels:
-            self.shortcut = False
-        else:
-            self.shortcut = True
-        if weight:
-            self.alpha = nn.Parameter(torch.ones(1))
-        else:
-            self.alpha = 1.0
-
-    def forward(self, x):
-        outputs = self.conv1(x)
-        outputs = self.conv2(outputs)
-        outputs = self.conv3(outputs)
-        return outputs + self.alpha * x if self.shortcut else outputs
-
-
-class RepBlock(nn.Module):
+class Yolov6RepBlock(nn.Module):
     """
-    RepBlock is a stage block with rep-style basic block
+    Yolov6RepBlock is a stage block with rep-style basic block
     """
 
     def __init__(
@@ -484,27 +441,21 @@ class RepBlock(nn.Module):
         in_channels,
         out_channels,
         n=1,
-        block=RepVGGBlock,
-        basic_block=RepVGGBlock,
+        block=Yolov6RepVGGBlock,
+        basic_block=Yolov6RepVGGBlock,
         **kwargs,
     ):
         super().__init__()
 
         self.conv1 = block(in_channels, out_channels)
-        self.block = (
-            nn.Sequential(*(block(out_channels, out_channels) for _ in range(n - 1)))
-            if n > 1
-            else None
-        )
-        if block == BottleRep:
-            self.conv1 = BottleRep(
-                in_channels, out_channels, basic_block=basic_block, weight=True
-            )
+        self.block = nn.Sequential(*(block(out_channels, out_channels) for _ in range(n - 1))) if n > 1 else None
+        if block == Yolov6BottleRep:
+            self.conv1 = Yolov6BottleRep(in_channels, out_channels, basic_block=basic_block, weight=True)
             n = n // 2
             self.block = (
                 nn.Sequential(
                     *(
-                        BottleRep(
+                        Yolov6BottleRep(
                             out_channels,
                             out_channels,
                             basic_block=basic_block,
@@ -524,7 +475,7 @@ class RepBlock(nn.Module):
         return x
 
 
-class BepC3(nn.Module):
+class Yolov6BepC3(nn.Module):
     """CSPStackRep Block"""
 
     def __init__(
@@ -533,138 +484,28 @@ class BepC3(nn.Module):
         out_channels,
         n=1,
         e=0.5,
-        block=RepVGGBlock,
+        block=Yolov6RepVGGBlock,
         activation_type="relu",
     ):
         super().__init__()
         c_ = int(out_channels * e)  # hidden channels
-        self.cv1 = ConvModule(in_channels, c_, 1, 1, activation_type=activation_type)
-        self.cv2 = ConvModule(in_channels, c_, 1, 1, activation_type=activation_type)
-        self.cv3 = ConvModule(
-            2 * c_, out_channels, 1, 1, activation_type=activation_type
-        )
+        self.cv1 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
+        self.cv2 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
+        self.cv3 = Yolov6ConvLayer(2 * c_, out_channels, 1, 1, activation_type=activation_type)
 
-        self.m = RepBlock(
-            in_channels=c_, out_channels=c_, n=n, block=BottleRep, basic_block=block
-        )
+        self.m = Yolov6RepBlock(in_channels=c_, out_channels=c_, n=n, block=Yolov6BottleRep, basic_block=block)
 
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
-class MBLABlock(nn.Module):
-    """Multi Branch Layer Aggregation Block"""
-
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        n=1,
-        e=0.5,
-        block=RepVGGBlock,
-        activation_type=None,
-    ):
-        super().__init__()
-        n = n // 2
-        if n <= 0:
-            n = 1
-
-        # max add one branch
-        if n == 1:
-            n_list = [0, 1]
-        else:
-            extra_branch_steps = 1
-            while extra_branch_steps * 2 < n:
-                extra_branch_steps *= 2
-            n_list = [0, extra_branch_steps, n]
-        branch_num = len(n_list)
-
-        c_ = int(out_channels * e)  # hidden channels
-        self.c = c_
-        self.cv1 = ConvModule(
-            in_channels, branch_num * self.c, 1, 1, activation_type, bias=False
-        )
-        self.cv2 = ConvModule(
-            (sum(n_list) + branch_num) * self.c,
-            out_channels,
-            1,
-            1,
-            activation_type,
-            bias=False,
-        )
-
-        self.m = nn.ModuleList()
-        for n_list_i in n_list[1:]:
-            self.m.append(
-                nn.Sequential(
-                    *(
-                        BottleRep3(self.c, self.c, basic_block=block, weight=True)
-                        for _ in range(n_list_i)
-                    )
-                )
-            )
-
-        self.split_num = tuple([self.c] * branch_num)
-
-    def forward(self, x):
-        y = list(self.cv1(x).split(self.split_num, 1))
-        all_y = [y[0]]
-        for m_idx, m_i in enumerate(self.m):
-            all_y.append(y[m_idx + 1])
-            all_y.extend(m(all_y[-1]) for m in m_i)
-        return self.cv2(torch.cat(all_y, 1))
-
-
-class Yolov6Embeddings(nn.Module):
-    def __init__(self, config: Yolov6Config) -> None:
-        super().__init__()
-        self.config = config
-
-        assert config.backbone_channels_list is not None
-        assert config.backbone_num_repeats is not None
-
-        if config.block_type == "RepVGGBlock":
-            block = RepVGGBlock
-        else:
-            raise NotImplementedError
-
-        self.embedder = block(
-            in_channels=config.num_channels,
-            out_channels=config.backbone_channels_list[0],
-            kernel_size=3,
-            stride=2,
-        )
-
-        self.num_channels = config.num_channels
-
-    def forward(
-        self,
-        pixel_values: Optional[torch.Tensor] = None,
-    ):
-        if pixel_values is None:
-            raise ValueError("You have to specify pixel_values")
-        num_channels = pixel_values.shape[1]
-        if num_channels != self.num_channels:
-            raise ValueError(
-                "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
-            )
-        embedding = self.embedder(pixel_values)
-        return embedding
-
-
 class SPPFModule(nn.Module):
-    def __init__(
-        self, in_channels, out_channels, kernel_size=5, activation_type="silu"
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size=5, activation_type="silu"):
         super().__init__()
         c_ = in_channels // 2  # hidden channels
-        self.cv1 = ConvModule(in_channels, c_, 1, 1, activation_type=activation_type)
-        self.cv2 = ConvModule(
-            c_ * 4, out_channels, 1, 1, activation_type=activation_type
-        )
-        self.m = nn.MaxPool2d(
-            kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-        )
+        self.cv1 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
+        self.cv2 = Yolov6ConvLayer(c_ * 4, out_channels, 1, 1, activation_type=activation_type)
+        self.m = nn.MaxPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
 
     def forward(self, x):
         x = self.cv1(x)
@@ -677,24 +518,18 @@ class SPPFModule(nn.Module):
 
 class CSPSPPFModule(nn.Module):
     # CSP https://github.com/WongKinYiu/CrossStagePartialNetworks
-    def __init__(
-        self, in_channels, out_channels, kernel_size=5, e=0.5, activation_type="silu"
-    ):
+    def __init__(self, in_channels, out_channels, kernel_size=5, e=0.5, activation_type="silu"):
         super().__init__()
         c_ = int(out_channels * e)  # hidden channels
-        self.cv1 = ConvModule(in_channels, c_, 1, 1, activation_type=activation_type)
-        self.cv2 = ConvModule(in_channels, c_, 1, 1, activation_type=activation_type)
-        self.cv3 = ConvModule(c_, c_, 3, 1, activation_type=activation_type)
-        self.cv4 = ConvModule(c_, c_, 1, 1, activation_type=activation_type)
+        self.cv1 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
+        self.cv2 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
+        self.cv3 = Yolov6ConvLayer(c_, c_, 3, 1, activation_type=activation_type)
+        self.cv4 = Yolov6ConvLayer(c_, c_, 1, 1, activation_type=activation_type)
 
-        self.m = nn.MaxPool2d(
-            kernel_size=kernel_size, stride=1, padding=kernel_size // 2
-        )
-        self.cv5 = ConvModule(4 * c_, c_, 1, 1, activation_type=activation_type)
-        self.cv6 = ConvModule(c_, c_, 3, 1, activation_type=activation_type)
-        self.cv7 = ConvModule(
-            2 * c_, out_channels, 1, 1, activation_type=activation_type
-        )
+        self.m = nn.MaxPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+        self.cv5 = Yolov6ConvLayer(4 * c_, c_, 1, 1, activation_type=activation_type)
+        self.cv6 = Yolov6ConvLayer(c_, c_, 3, 1, activation_type=activation_type)
+        self.cv7 = Yolov6ConvLayer(2 * c_, out_channels, 1, 1, activation_type=activation_type)
 
     def forward(self, x):
         x1 = self.cv4(self.cv3(self.cv1(x)))
@@ -729,21 +564,15 @@ class BiFusion(nn.Module):
 
     def __init__(self, in_channels, out_channels, activation_type="relu"):
         super().__init__()
-        self.cv1 = ConvModule(
-            in_channels[0], out_channels, 1, 1, activation_type=activation_type
-        )
-        self.cv2 = ConvModule(
-            in_channels[1], out_channels, 1, 1, activation_type=activation_type
-        )
-        self.cv3 = ConvModule(
-            out_channels * 3, out_channels, 1, 1, activation_type=activation_type
-        )
+        self.cv1 = Yolov6ConvLayer(in_channels[0], out_channels, 1, 1, activation_type=activation_type)
+        self.cv2 = Yolov6ConvLayer(in_channels[1], out_channels, 1, 1, activation_type=activation_type)
+        self.cv3 = Yolov6ConvLayer(out_channels * 3, out_channels, 1, 1, activation_type=activation_type)
 
         self.upsample = Transpose(
             in_channels=out_channels,
             out_channels=out_channels,
         )
-        self.downsample = ConvModule(
+        self.downsample = Yolov6ConvLayer(
             in_channels=out_channels,
             out_channels=out_channels,
             kernel_size=3,
@@ -767,9 +596,9 @@ class RepBiFPANNeck(nn.Module):
         self,
         channels_list=None,
         num_repeats=None,
-        block=BottleRep,
+        block=Yolov6RepVGGBlock,
         csp_e=float(1) / 2,
-        stage_block_type="BepC3",
+        stage_block_type="Yolov6BepC3",
         activation_type="relu",
     ):
         super().__init__()
@@ -777,14 +606,14 @@ class RepBiFPANNeck(nn.Module):
         assert channels_list is not None
         assert num_repeats is not None
 
-        if stage_block_type == "BepC3":
-            stage_block = BepC3
-        elif stage_block_type == "MBLABlock":
-            stage_block = MBLABlock
+        if stage_block_type == "Yolov6BepC3":
+            stage_block = Yolov6BepC3
+        elif stage_block_type == "Yolov6RepBlock":
+            stage_block = Yolov6RepBlock
         else:
             raise NotImplementedError
 
-        self.reduce_layer0 = ConvModule(
+        self.reduce_layer0 = Yolov6ConvLayer(
             in_channels=channels_list[4],  # 1024
             out_channels=channels_list[5],  # 256
             kernel_size=1,
@@ -805,7 +634,7 @@ class RepBiFPANNeck(nn.Module):
             block=block,
         )
 
-        self.reduce_layer1 = ConvModule(
+        self.reduce_layer1 = Yolov6ConvLayer(
             in_channels=channels_list[5],  # 256
             out_channels=channels_list[6],  # 128
             kernel_size=1,
@@ -826,7 +655,7 @@ class RepBiFPANNeck(nn.Module):
             block=block,
         )
 
-        self.downsample2 = ConvModule(
+        self.downsample2 = Yolov6ConvLayer(
             in_channels=channels_list[6],  # 128
             out_channels=channels_list[7],  # 128
             kernel_size=3,
@@ -842,7 +671,7 @@ class RepBiFPANNeck(nn.Module):
             block=block,
         )
 
-        self.downsample1 = ConvModule(
+        self.downsample1 = Yolov6ConvLayer(
             in_channels=channels_list[8],  # 256
             out_channels=channels_list[9],  # 256
             kernel_size=3,
@@ -859,7 +688,6 @@ class RepBiFPANNeck(nn.Module):
         )
 
     def forward(self, input):
-
         (x3, x2, x1, x0) = input
 
         fpn_out0 = self.reduce_layer0(x0)
@@ -883,255 +711,137 @@ class RepBiFPANNeck(nn.Module):
         return outputs
 
 
-class RepBiFPANNeck_P6(nn.Module):
-    """CSPRepBiFPANNeck_P6 + RepBiFPANNeck6 Module"""
-
-    # [64, 128, 256, 512, 768, 1024]
-    # [512, 256, 128, 256, 512, 1024]
-    def __init__(
-        self,
-        channels_list=None,
-        num_repeats=None,
-        block=BottleRep,
-        csp_e=float(1) / 2,
-        stage_block_type="BepC3",
-        activation_type="relu",
-    ):
+class Yolov6Embeddings(nn.Module):
+    def __init__(self, config: Yolov6Config) -> None:
         super().__init__()
+        self.config = config
 
-        assert channels_list is not None
-        assert num_repeats is not None
-
-        if stage_block_type == "BepC3":
-            stage_block = BepC3
-        elif stage_block_type == "RepBlock":
-            stage_block = RepBlock
+        if config.block_type == "Yolov6ConvBNSilu":
+            block = Yolov6ConvLayer
+        elif config.block_type == "Yolov6RepVGGBlock":
+            block = Yolov6RepVGGBlock
         else:
             raise NotImplementedError
-
-        self.reduce_layer0 = ConvModule(
-            in_channels=channels_list[5],  # 1024
-            out_channels=channels_list[6],  # 512
-            kernel_size=1,
-            stride=1,
-            activation_type=activation_type,
-        )
-
-        self.Bifusion0 = BiFusion(
-            in_channels=[channels_list[4], channels_list[6]],  # 768, 512
-            out_channels=channels_list[6],  # 512
-        )
-
-        self.Rep_p5 = stage_block(
-            in_channels=channels_list[6],  # 512
-            out_channels=channels_list[6],  # 512
-            n=num_repeats[6],
-            e=csp_e,
-            block=block,
-        )
-
-        self.reduce_layer1 = ConvModule(
-            in_channels=channels_list[6],  # 512
-            out_channels=channels_list[7],  # 256
-            kernel_size=1,
-            stride=1,
-            activation_type=activation_type,
-        )
-
-        self.Bifusion1 = BiFusion(
-            in_channels=[channels_list[3], channels_list[7]],  # 512, 256
-            out_channels=channels_list[7],  # 256
-        )
-
-        self.Rep_p4 = stage_block(
-            in_channels=channels_list[7],  # 256
-            out_channels=channels_list[7],  # 256
-            n=num_repeats[7],
-            e=csp_e,
-            block=block,
-        )
-
-        self.reduce_layer2 = ConvModule(
-            in_channels=channels_list[7],  # 256
-            out_channels=channels_list[8],  # 128
-            kernel_size=1,
-            stride=1,
-            activation_type=activation_type,
-        )
-
-        self.Bifusion2 = BiFusion(
-            in_channels=[channels_list[2], channels_list[8]],  # 256, 128
-            out_channels=channels_list[8],  # 128
-        )
-
-        self.Rep_p3 = stage_block(
-            in_channels=channels_list[8],  # 128
-            out_channels=channels_list[8],  # 128
-            n=num_repeats[8],
-            e=csp_e,
-            block=block,
-        )
-
-        self.downsample2 = ConvModule(
-            in_channels=channels_list[8],  # 128
-            out_channels=channels_list[8],  # 128
+            
+        self.embedder = block(
+            in_channels=config.in_channels,
+            out_channels=config.backbone_out_channels[0],
             kernel_size=3,
             stride=2,
-            activation_type=activation_type,
         )
 
-        self.Rep_n4 = stage_block(
-            in_channels=channels_list[8] + channels_list[8],  # 128 + 128
-            out_channels=channels_list[9],  # 256
-            n=num_repeats[9],
-            e=csp_e,
-            block=block,
-        )
+        self.in_channels = config.in_channels
 
-        self.downsample1 = ConvModule(
-            in_channels=channels_list[9],  # 256
-            out_channels=channels_list[9],  # 256
-            kernel_size=3,
-            stride=2,
-            activation_type=activation_type,
-        )
-
-        self.Rep_n5 = stage_block(
-            in_channels=channels_list[7] + channels_list[9],  # 256 + 256
-            out_channels=channels_list[10],  # 512
-            n=num_repeats[10],
-            e=csp_e,
-            block=block,
-        )
-
-        self.downsample0 = ConvModule(
-            in_channels=channels_list[10],  # 512
-            out_channels=channels_list[10],  # 512
-            kernel_size=3,
-            stride=2,
-            activation_type=activation_type,
-        )
-
-        self.Rep_n6 = stage_block(
-            in_channels=channels_list[6] + channels_list[10],  # 512 + 512
-            out_channels=channels_list[11],  # 1024
-            n=num_repeats[11],
-            e=csp_e,
-            block=block,
-        )
-
-    def forward(self, input):
-
-        (x4, x3, x2, x1, x0) = input
-
-        fpn_out0 = self.reduce_layer0(x0)
-        f_concat_layer0 = self.Bifusion0([fpn_out0, x1, x2])
-        f_out0 = self.Rep_p5(f_concat_layer0)
-
-        fpn_out1 = self.reduce_layer1(f_out0)
-        f_concat_layer1 = self.Bifusion1([fpn_out1, x2, x3])
-        f_out1 = self.Rep_p4(f_concat_layer1)
-
-        fpn_out2 = self.reduce_layer2(f_out1)
-        f_concat_layer2 = self.Bifusion2([fpn_out2, x3, x4])
-        pan_out3 = self.Rep_p3(f_concat_layer2)  # P3
-
-        down_feat2 = self.downsample2(pan_out3)
-        p_concat_layer2 = torch.cat([down_feat2, fpn_out2], 1)
-        pan_out2 = self.Rep_n4(p_concat_layer2)  # P4
-
-        down_feat1 = self.downsample1(pan_out2)
-        p_concat_layer1 = torch.cat([down_feat1, fpn_out1], 1)
-        pan_out1 = self.Rep_n5(p_concat_layer1)  # P5
-
-        down_feat0 = self.downsample0(pan_out1)
-        p_concat_layer0 = torch.cat([down_feat0, fpn_out0], 1)
-        pan_out0 = self.Rep_n6(p_concat_layer0)  # P6
-
-        outputs = [pan_out3, pan_out2, pan_out1, pan_out0]
-
-        return outputs
+    def forward(
+        self,
+        pixel_values: Optional[torch.Tensor] = None,
+    ):
+        if pixel_values is None:
+            raise ValueError("You have to specify pixel_values")
+        num_channels = pixel_values.shape[1]
+        if num_channels != self.in_channels:
+            raise ValueError(
+                "Make sure that the channel dimension of the pixel values match with the one set in the configuration."
+            )
+        embedding = self.embedder(pixel_values)
+        return embedding
 
 
 class Yolov6Encoder(nn.Module):
     def __init__(self, config: Yolov6Config) -> None:
         super().__init__()
         self.config = config
+        self.blocks = nn.ModuleList()
 
-        assert config.backbone_channels_list is not None
+        assert config.backbone_out_channels is not None
         assert config.backbone_num_repeats is not None
-        if "6" in config.backbone_type:
-            assert (
-                len(config.backbone_channels_list) == 6
-                and len(config.backbone_num_repeats) == 6
-            )
 
-        if config.block_type == "RepVGGBlock":
-            block = RepVGGBlock
+        if config.block_type == "Yolov6ConvBNSilu":
+            block = Yolov6ConvLayer
+        elif config.block_type == "Yolov6RepVGGBlock":
+            block = Yolov6RepVGGBlock
         else:
             raise NotImplementedError
 
-        if config.stage_block_type == "BepC3":
-            stage_block = BepC3
-        elif config.stage_block_type == "MBLABlock":
-            stage_block = MBLABlock
-        elif config.stage_block_type == "RepBlock":
-            stage_block = RepBlock
+        if config.backbone_stage_block_type == "Yolov6BepC3":
+            stage_block = Yolov6BepC3
+        elif config.backbone_stage_block_type == "Yolov6RepBlock":
+            stage_block = Yolov6RepBlock
         else:
             raise NotImplementedError
 
-        self.fuse_P2 = config.fuse_P2
+        self.backbone_fuse_P2 = config.backbone_fuse_P2
 
-        for i in range(0, len(config.backbone_channels_list) - 1):
+        for i in range(0, len(config.backbone_out_channels) - 1):
             # ERBlock
             er_block = nn.Sequential(
                 block(
-                    in_channels=config.backbone_channels_list[i],
-                    out_channels=config.backbone_channels_list[i + 1],
+                    in_channels=config.backbone_out_channels[i],
+                    out_channels=config.backbone_out_channels[i + 1],
                     kernel_size=3,
                     stride=2,
                 ),
                 stage_block(
-                    in_channels=config.backbone_channels_list[i + 1],
-                    out_channels=config.backbone_channels_list[i + 1],
+                    in_channels=config.backbone_out_channels[i + 1],
+                    out_channels=config.backbone_out_channels[i + 1],
                     n=config.backbone_num_repeats[i + 1],
-                    e=config.csp_e,
+                    e=config.backbone_csp_e,
                     block=block,
                 ),
             )
 
             # Channel merge layer
-            if config.cspsppf:
+            if config.backbone_cspsppf:
                 channel_merge_layer = CSPSPPFModule
             else:
                 channel_merge_layer = SPPFModule
 
-            if i == len(config.backbone_channels_list) - 1:
-                er_block.add_module(
-                    "channel_merge_layer",
-                    channel_merge_layer(
-                        in_channels=config.backbone_channels_list[i + 1],
-                        out_channels=config.backbone_channels_list[i + 1],
-                        kernel_size=5,
-                    ),
-                )
-
+            if i == len(config.backbone_out_channels) - 2:
+                if config.block_type == "Yolov6ConvBNSilu":
+                    er_block.add_module(
+                        "channel_merge_layer",
+                        channel_merge_layer(
+                            in_channels=config.backbone_out_channels[i + 1],
+                            out_channels=config.backbone_out_channels[i + 1],
+                            kernel_size=5,
+                            activation_type="silu",
+                        ),
+                    )
+                else:
+                    er_block.add_module(
+                        "channel_merge_layer",
+                        channel_merge_layer(
+                            in_channels=config.backbone_out_channels[i + 1],
+                            out_channels=config.backbone_out_channels[i + 1],
+                            kernel_size=5,
+                        ),
+                    )
             self.blocks.add_module(f"ERBlock_{i+2}", er_block)
 
     def forward(
         self,
-        hidden_state: Tensor,
-    ):
-        hidden_states = ()
+        hidden_states: Tensor,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = True,
+    ) -> Union[Tuple, BaseModelOutputWithNoAttention]:
+        all_hidden_states = () if output_hidden_states else None
 
-        hidden_state = self.blocks[0](hidden_state)
-        if self.fuse_P2:
-            hidden_states = hidden_states + (hidden_state,)
-        for block in self.blocks[1:]:
-            hidden_state = block(hidden_state)
-            hidden_states = hidden_states + (hidden_state,)
+        for n, block in enumerate(self.blocks):
+            hidden_states = block(hidden_states)
+            if self.backbone_fuse_P2 and n == 0:
+                if output_hidden_states:
+                    all_hidden_states = all_hidden_states + (hidden_states,)
+            else:
+                if output_hidden_states:
+                    all_hidden_states = all_hidden_states + (hidden_states,)
 
-        return hidden_states
+        if not return_dict:
+            return tuple(v for v in [hidden_states, all_hidden_states] if v is not None)
+
+        return BaseModelOutputWithNoAttention(
+            last_hidden_state=hidden_states,
+            hidden_states=all_hidden_states,
+        )
 
 
 class Yolov6Neck(nn.Module):
@@ -1139,52 +849,18 @@ class Yolov6Neck(nn.Module):
         super().__init__()
         self.config = config
 
-        assert config.neck_channels_list is not None
+        assert config.neck_out_channels is not None
         assert config.neck_num_repeats is not None
 
-        # if config.block_type == "RepVGGBlock":
-        #     block = RepVGGBlock
-        # else:
-        #     raise NotImplementedError
+        channels_list = config.backbone_out_channels + config.neck_out_channels
+        num_repeats = config.backbone_num_repeats + config.neck_num_repeats
 
-        # if config.stage_block_type == "BepC3":
-        #     stage_block = BepC3
-        # elif config.stage_block_type == "MBLABlock":
-        #     stage_block = MBLABlock
-        # elif config.stage_block_type == "RepBlock":
-        #     stage_block = RepBlock
-        # else:
-        #     raise NotImplementedError
-
-        channels_list = (config.backbone_channels_list + config.neck_channels_list,)
-        num_repeats = (config.backbone_num_repeats + config.neck_num_repeats,)
-
-        if config.neck_type == "CSPRepBiFPANNeck_P6":
-            self.stage = RepBiFPANNeck_P6(
-                channels_list=channels_list,
-                num_repeats=num_repeats,
-                stage_block_type="BepC3",
-            )
-        elif config.neck_type == "RepBiFPANNeck6":
-            self.stage = RepBiFPANNeck_P6(
-                channels_list=channels_list,
-                num_repeats=num_repeats,
-                stage_block_type="RepBlock",
-            )
-        elif config.neck_type == "CSPRepBiFPANNeck":
-            self.stage = RepBiFPANNeck(
-                channels_list=channels_list,
-                num_repeats=num_repeats,
-                stage_block_type="BepC3",
-            )
-        elif config.neck_type == "RepBiFPANNeck":
-            self.stage = RepBiFPANNeck(
-                channels_list=channels_list,
-                num_repeats=num_repeats,
-                stage_block_type="RepBlock",
-            )
-        else:
-            raise NotImplementedError
+        self.stage = RepBiFPANNeck(
+            channels_list=channels_list,
+            num_repeats=num_repeats,
+            csp_e=config.neck_csp_e,
+            stage_block_type=config.neck_stage_block_type,
+        )
 
     def forward(
         self,
@@ -1192,6 +868,168 @@ class Yolov6Neck(nn.Module):
     ):
         hidden_state = self.stage(hidden_state)
         return hidden_state
+
+
+class Yolov6Head(nn.Module):
+    export = False
+    """Efficient Decoupled Head
+    With hardware-aware degisn, the decoupled head is optimized with
+    hybridchannels methods.
+    """
+
+    def __init__(self, config: Yolov6Config):  # detection layer
+        super().__init__()
+
+        layers = []
+        for i in range(config.head_num_layers):
+            layers += [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[2 * i + 1],
+                    kernel_size=1,
+                    stride=1,
+                    activation_type="silu",
+                ),
+                Yolov6ConvLayer(
+                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[2 * i + 1],
+                    kernel_size=3,
+                    stride=1,
+                    activation_type="silu",
+                ),
+                Yolov6ConvLayer(
+                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[2 * i + 1],
+                    kernel_size=3,
+                    stride=1,
+                    activation_type="silu",
+                ),
+                nn.Conv2d(config.neck_out_channels[2 * i + 1], config.num_labels, kernel_size=1),
+                nn.Conv2d(config.neck_out_channels[2 * i + 1], 4 * (config.reg_max + 1), kernel_size=1),
+            ]
+        head_layers = nn.Sequential(*layers)
+
+        self.config = config
+
+        self.grid = [torch.zeros(1)] * config.head_num_layers
+        self.prior_prob = 1e-2
+        self.inplace = True
+        self.stride = torch.tensor(config.head_strides)
+        self.proj_conv = nn.Conv2d(config.reg_max_proj + 1, 1, 1, bias=False)
+        self.grid_cell_offset = 0.5
+        self.grid_cell_size = 5.0
+
+        # Init decouple head
+        self.stems = nn.ModuleList()
+        self.cls_convs = nn.ModuleList()
+        self.reg_convs = nn.ModuleList()
+        self.cls_preds = nn.ModuleList()
+        self.reg_preds = nn.ModuleList()
+
+        # Efficient decoupled head layers
+        for i in range(config.head_num_layers):
+            idx = i * 5
+            self.stems.append(head_layers[idx])
+            self.cls_convs.append(head_layers[idx + 1])
+            self.reg_convs.append(head_layers[idx + 2])
+            self.cls_preds.append(head_layers[idx + 3])
+            self.reg_preds.append(head_layers[idx + 4])
+
+        self.initialize_biases()
+
+    def initialize_biases(self):
+        for conv in self.cls_preds:
+            b = conv.bias.view(
+                -1,
+            )
+            b.data.fill_(-math.log((1 - self.prior_prob) / self.prior_prob))
+            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+            w = conv.weight
+            w.data.fill_(0.0)
+            conv.weight = torch.nn.Parameter(w, requires_grad=True)
+
+        for conv in self.reg_preds:
+            b = conv.bias.view(
+                -1,
+            )
+            b.data.fill_(1.0)
+            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
+            w = conv.weight
+            w.data.fill_(0.0)
+            conv.weight = torch.nn.Parameter(w, requires_grad=True)
+
+        self.proj = nn.Parameter(torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1), requires_grad=False)
+        self.proj_conv.weight = nn.Parameter(
+            self.proj.view([1, self.config.reg_max_proj + 1, 1, 1]).clone().detach(),
+            requires_grad=False,
+        )
+
+    def forward(self, x):
+        cls_score_list = []
+        reg_dist_list = []
+        reg_distri_list = []
+        if self.training:
+            for i in range(self.config.head_num_layers):
+                x[i] = self.stems[i](x[i])
+                cls_x = x[i]
+                reg_x = x[i]
+                cls_feat = self.cls_convs[i](cls_x)
+                cls_output = self.cls_preds[i](cls_feat)
+                reg_feat = self.reg_convs[i](reg_x)
+                reg_output = self.reg_preds[i](reg_feat)
+
+                cls_output = torch.sigmoid(cls_output)
+                cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
+                reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
+
+            cls_score_list = torch.cat(cls_score_list, axis=1)
+            reg_distri_list = torch.cat(reg_distri_list, axis=1)
+
+            return x, cls_score_list, reg_distri_list
+        else:
+            for i in range(self.config.head_num_layers):
+                b, _, h, w = x[i].shape
+                l = h * w
+                x[i] = self.stems[i](x[i])
+                cls_x = x[i]
+                reg_x = x[i]
+                cls_feat = self.cls_convs[i](cls_x)
+                cls_output = self.cls_preds[i](cls_feat)
+                reg_feat = self.reg_convs[i](reg_x)
+                reg_output = self.reg_preds[i](reg_feat)
+
+                if self.config.use_dfl:
+                    reg_output = reg_output.reshape([-1, 4, self.config.reg_max + 1, l]).permute(0, 2, 1, 3)
+                    reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
+
+                cls_output = torch.sigmoid(cls_output)
+
+                if self.export:
+                    cls_score_list.append(cls_output)
+                    reg_dist_list.append(reg_output)
+                else:
+                    cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
+                    reg_dist_list.append(reg_output.reshape([b, 4, l]))
+
+            if self.export:
+                return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_dist_list))
+
+            cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
+            reg_dist_list = torch.cat(reg_dist_list, axis=-1).permute(0, 2, 1)
+
+            anchor_points, stride_tensor = generate_anchors(
+                x,
+                self.stride,
+                self.grid_cell_size,
+                self.grid_cell_offset,
+                device=x[0].device,
+                is_eval=True,
+                mode="af",
+            )
+
+            pred_bboxes = dist2bbox(reg_dist_list, anchor_points, box_format="xywh")
+            pred_bboxes *= stride_tensor
+            return None, cls_score_list, pred_bboxes
 
 
 class Yolov6PreTrainedModel(PreTrainedModel):
@@ -1283,13 +1121,9 @@ class Yolov6Model(Yolov6PreTrainedModel):
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithNoAttention]:
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if pixel_values is None:
             raise ValueError("You have to specify pixel_values")
@@ -1297,341 +1131,15 @@ class Yolov6Model(Yolov6PreTrainedModel):
         embedding_output = self.embedder(pixel_values)
         encoder_outputs = self.encoder(
             embedding_output,
-            output_hidden_states=output_hidden_states,
+            output_hidden_states=True,
             return_dict=return_dict,
         )
-        outputs = self.neck(encoder_outputs)
+        outputs = self.neck(encoder_outputs.hidden_states)
 
         if not return_dict:
             return outputs
 
-        return BaseModelOutputWithNoAttention(
-            last_hidden_state=None, hidden_states=outputs
-        )
-
-
-class Yolov6Head(nn.Module):
-    export = False
-    """Efficient Decoupled Head
-    With hardware-aware degisn, the decoupled head is optimized with
-    hybridchannels methods.
-    """
-
-    def __init__(
-        self,
-        num_classes=80,
-        num_layers=3,
-        inplace=True,
-        head_layers=None,
-        use_dfl=True,
-        reg_max=16,
-    ):  # detection layer
-        super().__init__()
-        assert head_layers is not None
-
-    chx = [6, 8, 10] if num_layers == 3 else [8, 9, 10, 11]
-
-    head_layers = nn.Sequential(
-        # stem0
-        ConvBNSiLU(
-            in_channels=channels_list[chx[0]],
-            out_channels=channels_list[chx[0]],
-            kernel_size=1,
-            stride=1,
-        ),
-        # cls_conv0
-        ConvBNSiLU(
-            in_channels=channels_list[chx[0]],
-            out_channels=channels_list[chx[0]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # reg_conv0
-        ConvBNSiLU(
-            in_channels=channels_list[chx[0]],
-            out_channels=channels_list[chx[0]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # cls_pred0
-        nn.Conv2d(
-            in_channels=channels_list[chx[0]],
-            out_channels=num_classes * num_anchors,
-            kernel_size=1,
-        ),
-        # reg_pred0
-        nn.Conv2d(
-            in_channels=channels_list[chx[0]],
-            out_channels=4 * (reg_max + num_anchors),
-            kernel_size=1,
-        ),
-        # stem1
-        ConvBNSiLU(
-            in_channels=channels_list[chx[1]],
-            out_channels=channels_list[chx[1]],
-            kernel_size=1,
-            stride=1,
-        ),
-        # cls_conv1
-        ConvBNSiLU(
-            in_channels=channels_list[chx[1]],
-            out_channels=channels_list[chx[1]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # reg_conv1
-        ConvBNSiLU(
-            in_channels=channels_list[chx[1]],
-            out_channels=channels_list[chx[1]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # cls_pred1
-        nn.Conv2d(
-            in_channels=channels_list[chx[1]],
-            out_channels=num_classes * num_anchors,
-            kernel_size=1,
-        ),
-        # reg_pred1
-        nn.Conv2d(
-            in_channels=channels_list[chx[1]],
-            out_channels=4 * (reg_max + num_anchors),
-            kernel_size=1,
-        ),
-        # stem2
-        ConvBNSiLU(
-            in_channels=channels_list[chx[2]],
-            out_channels=channels_list[chx[2]],
-            kernel_size=1,
-            stride=1,
-        ),
-        # cls_conv2
-        ConvBNSiLU(
-            in_channels=channels_list[chx[2]],
-            out_channels=channels_list[chx[2]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # reg_conv2
-        ConvBNSiLU(
-            in_channels=channels_list[chx[2]],
-            out_channels=channels_list[chx[2]],
-            kernel_size=3,
-            stride=1,
-        ),
-        # cls_pred2
-        nn.Conv2d(
-            in_channels=channels_list[chx[2]],
-            out_channels=num_classes * num_anchors,
-            kernel_size=1,
-        ),
-        # reg_pred2
-        nn.Conv2d(
-            in_channels=channels_list[chx[2]],
-            out_channels=4 * (reg_max + num_anchors),
-            kernel_size=1,
-        ),
-    )
-
-    if num_layers == 4:
-        head_layers.add_module(
-            "stem3",
-            # stem3
-            ConvBNSiLU(
-                in_channels=channels_list[chx[3]],
-                out_channels=channels_list[chx[3]],
-                kernel_size=1,
-                stride=1,
-            ),
-        )
-        head_layers.add_module(
-            "cls_conv3",
-            # cls_conv3
-            ConvBNSiLU(
-                in_channels=channels_list[chx[3]],
-                out_channels=channels_list[chx[3]],
-                kernel_size=3,
-                stride=1,
-            ),
-        )
-        head_layers.add_module(
-            "reg_conv3",
-            # reg_conv3
-            ConvBNSiLU(
-                in_channels=channels_list[chx[3]],
-                out_channels=channels_list[chx[3]],
-                kernel_size=3,
-                stride=1,
-            ),
-        )
-        head_layers.add_module(
-            "cls_pred3",
-            # cls_pred3
-            nn.Conv2d(
-                in_channels=channels_list[chx[3]],
-                out_channels=num_classes * num_anchors,
-                kernel_size=1,
-            ),
-        )
-        head_layers.add_module(
-            "reg_pred3",
-            # reg_pred3
-            nn.Conv2d(
-                in_channels=channels_list[chx[3]],
-                out_channels=4 * (reg_max + num_anchors),
-                kernel_size=1,
-            ),
-        )
-
-        self.nc = num_classes  # number of classes
-        self.no = num_classes + 5  # number of outputs per anchor
-        self.nl = num_layers  # number of detection layers
-        self.grid = [torch.zeros(1)] * num_layers
-        self.prior_prob = 1e-2
-        self.inplace = inplace
-        stride = (
-            [8, 16, 32] if num_layers == 3 else [8, 16, 32, 64]
-        )  # strides computed during build
-        self.stride = torch.tensor(stride)
-        self.use_dfl = use_dfl
-        self.reg_max = reg_max
-        self.proj_conv = nn.Conv2d(self.reg_max + 1, 1, 1, bias=False)
-        self.grid_cell_offset = 0.5
-        self.grid_cell_size = 5.0
-
-        # Init decouple head
-        self.stems = nn.ModuleList()
-        self.cls_convs = nn.ModuleList()
-        self.reg_convs = nn.ModuleList()
-        self.cls_preds = nn.ModuleList()
-        self.reg_preds = nn.ModuleList()
-
-        # Efficient decoupled head layers
-        for i in range(num_layers):
-            idx = i * 5
-            self.stems.append(head_layers[idx])
-            self.cls_convs.append(head_layers[idx + 1])
-            self.reg_convs.append(head_layers[idx + 2])
-            self.cls_preds.append(head_layers[idx + 3])
-            self.reg_preds.append(head_layers[idx + 4])
-
-    def initialize_biases(self):
-
-        for conv in self.cls_preds:
-            b = conv.bias.view(
-                -1,
-            )
-            b.data.fill_(-math.log((1 - self.prior_prob) / self.prior_prob))
-            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
-            w = conv.weight
-            w.data.fill_(0.0)
-            conv.weight = torch.nn.Parameter(w, requires_grad=True)
-
-        for conv in self.reg_preds:
-            b = conv.bias.view(
-                -1,
-            )
-            b.data.fill_(1.0)
-            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
-            w = conv.weight
-            w.data.fill_(0.0)
-            conv.weight = torch.nn.Parameter(w, requires_grad=True)
-
-        self.proj = nn.Parameter(
-            torch.linspace(0, self.reg_max, self.reg_max + 1), requires_grad=False
-        )
-        self.proj_conv.weight = nn.Parameter(
-            self.proj.view([1, self.reg_max + 1, 1, 1]).clone().detach(),
-            requires_grad=False,
-        )
-
-    def forward(self, x):
-        if self.training:
-            cls_score_list = []
-            reg_distri_list = []
-
-            for i in range(self.nl):
-                x[i] = self.stems[i](x[i])
-                cls_x = x[i]
-                reg_x = x[i]
-                cls_feat = self.cls_convs[i](cls_x)
-                cls_output = self.cls_preds[i](cls_feat)
-                reg_feat = self.reg_convs[i](reg_x)
-                reg_output = self.reg_preds[i](reg_feat)
-
-                cls_output = torch.sigmoid(cls_output)
-                cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
-                reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
-
-            cls_score_list = torch.cat(cls_score_list, axis=1)
-            reg_distri_list = torch.cat(reg_distri_list, axis=1)
-
-            return x, cls_score_list, reg_distri_list
-        else:
-            cls_score_list = []
-            reg_dist_list = []
-
-            for i in range(self.nl):
-                b, _, h, w = x[i].shape
-                l = h * w
-                x[i] = self.stems[i](x[i])
-                cls_x = x[i]
-                reg_x = x[i]
-                cls_feat = self.cls_convs[i](cls_x)
-                cls_output = self.cls_preds[i](cls_feat)
-                reg_feat = self.reg_convs[i](reg_x)
-                reg_output = self.reg_preds[i](reg_feat)
-
-                if self.use_dfl:
-                    reg_output = reg_output.reshape(
-                        [-1, 4, self.reg_max + 1, l]
-                    ).permute(0, 2, 1, 3)
-                    reg_output = self.proj_conv(
-                        nn.functional.softmax(reg_output, dim=1)
-                    )
-
-                cls_output = torch.sigmoid(cls_output)
-
-                if self.export:
-                    cls_score_list.append(cls_output)
-                    reg_dist_list.append(reg_output)
-                else:
-                    cls_score_list.append(cls_output.reshape([b, self.nc, l]))
-                    reg_dist_list.append(reg_output.reshape([b, 4, l]))
-
-            if self.export:
-                return tuple(
-                    torch.cat([cls, reg], 1)
-                    for cls, reg in zip(cls_score_list, reg_dist_list)
-                )
-
-            cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
-            reg_dist_list = torch.cat(reg_dist_list, axis=-1).permute(0, 2, 1)
-
-            anchor_points, stride_tensor = generate_anchors(
-                x,
-                self.stride,
-                self.grid_cell_size,
-                self.grid_cell_offset,
-                device=x[0].device,
-                is_eval=True,
-                mode="af",
-            )
-
-            pred_bboxes = dist2bbox(reg_dist_list, anchor_points, box_format="xywh")
-            pred_bboxes *= stride_tensor
-            return torch.cat(
-                [
-                    pred_bboxes,
-                    torch.ones(
-                        (b, pred_bboxes.shape[1], 1),
-                        device=pred_bboxes.device,
-                        dtype=pred_bboxes.dtype,
-                    ),
-                    cls_score_list,
-                ],
-                axis=-1,
-            )
+        return BaseModelOutputWithNoAttention(last_hidden_state=None, hidden_states=outputs)
 
 
 @add_start_docstrings(
@@ -1649,20 +1157,13 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
 
         # Object detection heads
         # We add one for the "no object" class
-        self.head = Yolov6Head(
-            input_dim=config.hidden_size,
-            hidden_dim=config.hidden_size,
-            output_dim=config.num_labels + 1,
-            num_layers=3,
-        )
+        self.head = Yolov6Head(config)
 
         # Initialize weights and apply final processing
         self.post_init()
 
     @add_start_docstrings_to_model_forward(YOLOV6_INPUTS_DOCSTRING)
-    @replace_return_docstrings(
-        output_type=Yolov6ObjectDetectionOutput, config_class=_CONFIG_FOR_DOC
-    )
+    @replace_return_docstrings(output_type=Yolov6ObjectDetectionOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         pixel_values: torch.FloatTensor,
@@ -1716,21 +1217,18 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
         Detected remote with confidence 0.922 at location [41.66, 71.96, 178.7, 120.33]
         Detected cat with confidence 0.914 at location [342.34, 21.48, 638.64, 372.46]
         ```"""
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # First, sent images through YOLOS base model to obtain hidden states
         outputs = self.model(
             pixel_values,
-            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
 
-        outputs = self.head(outputs)
+        feats, logits, pred_boxes = self.head(outputs.hidden_states)
 
-        loss, loss_dict, auxiliary_outputs = None, None, None
+        loss, loss_dict = None, None
         if labels is not None:
             # First: create the matcher
             matcher = YolosHungarianMatcher(
@@ -1757,17 +1255,10 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             weight_dict = {"loss_ce": 1, "loss_bbox": self.config.bbox_loss_coefficient}
             weight_dict["loss_giou"] = self.config.giou_loss_coefficient
 
-            loss = sum(
-                loss_dict[k] * weight_dict[k]
-                for k in loss_dict.keys()
-                if k in weight_dict
-            )
+            loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         if not return_dict:
-            if auxiliary_outputs is not None:
-                output = (logits, pred_boxes) + auxiliary_outputs + outputs
-            else:
-                output = (logits, pred_boxes) + outputs
+            output = (logits, pred_boxes) + outputs
             return ((loss, loss_dict) + output) if loss is not None else output
 
         return Yolov6ObjectDetectionOutput(
@@ -1775,10 +1266,8 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             loss_dict=loss_dict,
             logits=logits,
             pred_boxes=pred_boxes,
-            auxiliary_outputs=auxiliary_outputs,
             last_hidden_state=outputs.last_hidden_state,
             hidden_states=outputs.hidden_states,
-            attentions=outputs.attentions,
         )
 
 
@@ -1803,9 +1292,7 @@ def dice_loss(inputs, targets, num_boxes):
 
 
 # Copied from transformers.models.detr.modeling_detr.sigmoid_focal_loss
-def sigmoid_focal_loss(
-    inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2
-):
+def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
     """
     Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
 
@@ -1824,9 +1311,7 @@ def sigmoid_focal_loss(
         Loss tensor
     """
     prob = inputs.sigmoid()
-    ce_loss = nn.functional.binary_cross_entropy_with_logits(
-        inputs, targets, reduction="none"
-    )
+    ce_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
     # add modulating factor
     p_t = prob * targets + (1 - prob) * (1 - targets)
     loss = ce_loss * ((1 - p_t) ** gamma)
@@ -1885,9 +1370,7 @@ class Yolov6Loss(nn.Module):
         source_logits = outputs["logits"]
 
         idx = self._get_source_permutation_idx(indices)
-        target_classes_o = torch.cat(
-            [t["class_labels"][J] for t, (_, J) in zip(targets, indices)]
-        )
+        target_classes_o = torch.cat([t["class_labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(
             source_logits.shape[:2],
             self.num_classes,
@@ -1896,9 +1379,7 @@ class Yolov6Loss(nn.Module):
         )
         target_classes[idx] = target_classes_o
 
-        loss_ce = nn.functional.cross_entropy(
-            source_logits.transpose(1, 2), target_classes, self.empty_weight
-        )
+        loss_ce = nn.functional.cross_entropy(source_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {"loss_ce": loss_ce}
 
         return losses
@@ -1912,9 +1393,7 @@ class Yolov6Loss(nn.Module):
         """
         logits = outputs["logits"]
         device = logits.device
-        target_lengths = torch.as_tensor(
-            [len(v["class_labels"]) for v in targets], device=device
-        )
+        target_lengths = torch.as_tensor([len(v["class_labels"]) for v in targets], device=device)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
         card_pred = (logits.argmax(-1) != logits.shape[-1] - 1).sum(1)
         card_err = nn.functional.l1_loss(card_pred.float(), target_lengths.float())
@@ -1932,9 +1411,7 @@ class Yolov6Loss(nn.Module):
             raise KeyError("No predicted boxes found in outputs")
         idx = self._get_source_permutation_idx(indices)
         source_boxes = outputs["pred_boxes"][idx]
-        target_boxes = torch.cat(
-            [t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0
-        )
+        target_boxes = torch.cat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
         loss_bbox = nn.functional.l1_loss(source_boxes, target_boxes, reduction="none")
 
@@ -1988,17 +1465,13 @@ class Yolov6Loss(nn.Module):
 
     def _get_source_permutation_idx(self, indices):
         # permute predictions following indices
-        batch_idx = torch.cat(
-            [torch.full_like(source, i) for i, (source, _) in enumerate(indices)]
-        )
+        batch_idx = torch.cat([torch.full_like(source, i) for i, (source, _) in enumerate(indices)])
         source_idx = torch.cat([source for (source, _) in indices])
         return batch_idx, source_idx
 
     def _get_target_permutation_idx(self, indices):
         # permute targets following indices
-        batch_idx = torch.cat(
-            [torch.full_like(target, i) for i, (_, target) in enumerate(indices)]
-        )
+        batch_idx = torch.cat([torch.full_like(target, i) for i, (_, target) in enumerate(indices)])
         target_idx = torch.cat([target for (_, target) in indices])
         return batch_idx, target_idx
 
@@ -2023,18 +1496,14 @@ class Yolov6Loss(nn.Module):
                 List of dicts, such that `len(targets) == batch_size`. The expected keys in each dict depends on the
                 losses applied, see each loss' doc.
         """
-        outputs_without_aux = {
-            k: v for k, v in outputs.items() if k != "auxiliary_outputs"
-        }
+        outputs_without_aux = {k: v for k, v in outputs.items() if k != "auxiliary_outputs"}
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets)
 
         # Compute the average number of target boxes across all nodes, for normalization purposes
         num_boxes = sum(len(t["class_labels"]) for t in targets)
-        num_boxes = torch.as_tensor(
-            [num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device
-        )
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         # (Niels): comment out function below, distributed training to be added
         # if is_dist_avail_and_initialized():
         #     torch.distributed.all_reduce(num_boxes)
@@ -2054,9 +1523,7 @@ class Yolov6Loss(nn.Module):
                     if loss == "masks":
                         # Intermediate masks losses are too costly to compute, we ignore them.
                         continue
-                    l_dict = self.get_loss(
-                        loss, auxiliary_outputs, targets, indices, num_boxes
-                    )
+                    l_dict = self.get_loss(loss, auxiliary_outputs, targets, indices, num_boxes)
                     l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
@@ -2077,9 +1544,7 @@ class YolosMLPPredictionHead(nn.Module):
         super().__init__()
         self.num_layers = num_layers
         h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(
-            nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
-        )
+        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
@@ -2105,9 +1570,7 @@ class YolosHungarianMatcher(nn.Module):
             The relative weight of the giou loss of the bounding box in the matching cost.
     """
 
-    def __init__(
-        self, class_cost: float = 1, bbox_cost: float = 1, giou_cost: float = 1
-    ):
+    def __init__(self, class_cost: float = 1, bbox_cost: float = 1, giou_cost: float = 1):
         super().__init__()
         requires_backends(self, ["scipy"])
 
@@ -2141,9 +1604,7 @@ class YolosHungarianMatcher(nn.Module):
         batch_size, num_queries = outputs["logits"].shape[:2]
 
         # We flatten to compute the cost matrices in a batch
-        out_prob = (
-            outputs["logits"].flatten(0, 1).softmax(-1)
-        )  # [batch_size * num_queries, num_classes]
+        out_prob = outputs["logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
         out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
         # Also concat the target labels and boxes
@@ -2159,23 +1620,14 @@ class YolosHungarianMatcher(nn.Module):
         bbox_cost = torch.cdist(out_bbox, target_bbox, p=1)
 
         # Compute the giou cost between boxes
-        giou_cost = -generalized_box_iou(
-            center_to_corners_format(out_bbox), center_to_corners_format(target_bbox)
-        )
+        giou_cost = -generalized_box_iou(center_to_corners_format(out_bbox), center_to_corners_format(target_bbox))
 
         # Final cost matrix
-        cost_matrix = (
-            self.bbox_cost * bbox_cost
-            + self.class_cost * class_cost
-            + self.giou_cost * giou_cost
-        )
+        cost_matrix = self.bbox_cost * bbox_cost + self.class_cost * class_cost + self.giou_cost * giou_cost
         cost_matrix = cost_matrix.view(batch_size, num_queries, -1).cpu()
 
         sizes = [len(v["boxes"]) for v in targets]
-        indices = [
-            linear_sum_assignment(c[i])
-            for i, c in enumerate(cost_matrix.split(sizes, -1))
-        ]
+        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(cost_matrix.split(sizes, -1))]
         return [
             (
                 torch.as_tensor(i, dtype=torch.int64),
@@ -2239,13 +1691,9 @@ def generalized_box_iou(boxes1, boxes2):
     # degenerate boxes gives inf / nan results
     # so do an early check
     if not (boxes1[:, 2:] >= boxes1[:, :2]).all():
-        raise ValueError(
-            f"boxes1 must be in [x0, y0, x1, y1] (corner) format, but got {boxes1}"
-        )
+        raise ValueError(f"boxes1 must be in [x0, y0, x1, y1] (corner) format, but got {boxes1}")
     if not (boxes2[:, 2:] >= boxes2[:, :2]).all():
-        raise ValueError(
-            f"boxes2 must be in [x0, y0, x1, y1] (corner) format, but got {boxes2}"
-        )
+        raise ValueError(f"boxes2 must be in [x0, y0, x1, y1] (corner) format, but got {boxes2}")
     iou, union = box_iou(boxes1, boxes2)
 
     top_left = torch.min(boxes1[:, None, :2], boxes2[:, :2])

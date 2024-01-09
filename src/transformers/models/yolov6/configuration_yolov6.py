@@ -32,7 +32,7 @@ YOLOS_PRETRAINED_CONFIG_ARCHIVE_MAP = {
 }
 
 
-class YolosConfig(PretrainedConfig):
+class Yolov6Config(PretrainedConfig):
     r"""
     This is the configuration class to store the configuration of a [`YolosModel`]. It is used to instantiate a YOLOS
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -95,10 +95,10 @@ class YolosConfig(PretrainedConfig):
     >>> from transformers import Yolov6Config, Yolov6Model
 
     >>> # Initializing a YOLOV6 hustvl/yolos-base style configuration
-    >>> configuration = YolosConfig()
+    >>> configuration = Yolov6Config()
 
     >>> # Initializing a model (with random weights) from the hustvl/yolos-base style configuration
-    >>> model = YolosModel(configuration)
+    >>> model = Yolov6Model(configuration)
 
     >>> # Accessing the model configuration
     >>> configuration = model.config
@@ -108,77 +108,65 @@ class YolosConfig(PretrainedConfig):
 
     def __init__(
         self,
-        depth_multiple=1.0,
-        width_multiple=1.0,
-        backbone_type="CSPBepBackbone_P6",
-        backbone_num_repeats=[1, 6, 12, 18, 6, 6],
-        backbone_out_channels=[64, 128, 256, 512, 768, 1024],
-        backbone_csp_e=float(1) / 2,
+        in_channels=3,
+        block_type="Yolov6RepVGGBlock",
+        backbone_num_repeats=[1, 2, 4, 6, 2],
+        backbone_out_channels=[16, 32, 64, 128, 256],
+        backbone_csp_e=float(0),
         backbone_fuse_P2=True,
-        neck_type="CSPRepBiFPANNeck_P6",
-        neck_num_repeats=[12, 12, 12, 12, 12, 12],
-        neck_out_channels=[512, 256, 128, 256, 512, 1024],
-        neck_csp_e=float(1) / 2,
-        head_type="EffiDeHead",
-        head_in_channels=[128, 256, 512, 1024],
-        head_num_layers=4,
-        head_anchors=1,
-        head_strides=[8, 16, 32, 64],
-        head_atss_warmup_epoch=4,
-        iou_type="giou",
-        use_dfl=True,
-        reg_max=16,  # if use_dfl is False, please set reg_max to 0
+        backbone_cspsppf=True,
+        backbone_stage_block_type="Yolov6RepBlock",
+        neck_num_repeats=[4, 4, 4, 4],
+        neck_out_channels=[64, 32, 32, 64, 64, 128],
+        neck_csp_e=float(0),
+        neck_stage_block_type="Yolov6RepBlock",
+        head_in_channels=[128, 256, 512],
+        head_num_layers=3,
+        head_anchors=3,
+        head_strides=[8, 16, 32],
+        iou_type="siou",
+        use_dfl=False,
+        reg_max=0,  # if use_dfl is False, please set reg_max to 0
+        reg_max_proj=16,
         class_loss_coefficient=1.0,
         iou_loss_coefficient=1.0,
-        dfl_loss_coefficient=0.5,
-        auxiliary_loss=False,
+        dfl_loss_coefficient=1.0,
+        initializer_range=0.02,
         **kwargs,
     ):
         super().__init__(**kwargs)
 
-        self.depth_multiple = depth_multiple
-        self.width_multiple = width_multiple
+        # deprecated due to unexpected behavior in huggingface push_to_hub
+        # backbone_num_repeats = [(max(round(i * depth_multiple), 1) if i > 1 else i) for i in backbone_num_repeats]
+        # neck_num_repeats = [(max(round(i * depth_multiple), 1) if i > 1 else i) for i in neck_num_repeats]
 
-        backbone_num_repeats = [
-            (max(round(i * depth_multiple), 1) if i > 1 else i)
-            for i in backbone_num_repeats
-        ]
-        neck_num_repeats = [
-            (max(round(i * depth_multiple), 1) if i > 1 else i)
-            for i in neck_num_repeats
-        ]
+        # backbone_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in backbone_out_channels]
+        # neck_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in neck_out_channels]
 
-        backbone_out_channels = [
-            math.ceil(i * width_multiple / 8) * 8 for i in backbone_out_channels
-        ]
-        neck_out_channels = [
-            math.ceil(i * width_multiple / 8) * 8 for i in neck_out_channels
-        ]
-
-        self.backbone_type = backbone_type
+        self.in_channels = in_channels
+        self.block_type = block_type
         self.backbone_num_repeats = backbone_num_repeats
         self.backbone_out_channels = backbone_out_channels
         self.backbone_csp_e = backbone_csp_e
         self.backbone_fuse_P2 = backbone_fuse_P2
-        self.neck_type = neck_type
+        self.backbone_cspsppf = backbone_cspsppf
+        self.backbone_stage_block_type = backbone_stage_block_type
         self.neck_num_repeats = neck_num_repeats
         self.neck_out_channels = neck_out_channels
         self.neck_csp_e = neck_csp_e
-        self.head_type = head_type
+        self.neck_stage_block_type = neck_stage_block_type
         self.head_in_channels = head_in_channels
         self.head_num_layers = head_num_layers
         self.head_anchors = head_anchors
         self.head_strides = head_strides
-        self.head_atss_warmup_epoch = head_atss_warmup_epoch
         self.iou_type = iou_type
         self.use_dfl = use_dfl
         self.reg_max = reg_max
-        self.auxiliary_loss = auxiliary_loss
-
-        # Loss coefficients
+        self.reg_max_proj = reg_max_proj
         self.class_loss_coefficient = class_loss_coefficient
         self.iou_loss_coefficient = iou_loss_coefficient
         self.dfl_loss_coefficient = dfl_loss_coefficient
+        self.initializer_range = initializer_range
 
 
 class Yolov6OnnxConfig(OnnxConfig):

@@ -665,7 +665,7 @@ def compute_segments(
     return segmentation, segments
 
 
-class YolosImageProcessor(BaseImageProcessor):
+class Yolov6ImageProcessor(BaseImageProcessor):
     r"""
     Constructs a Detr image processor.
 
@@ -710,7 +710,7 @@ class YolosImageProcessor(BaseImageProcessor):
         resample: PILImageResampling = PILImageResampling.BILINEAR,
         do_rescale: bool = True,
         rescale_factor: Union[int, float] = 1 / 255,
-        do_normalize: bool = True,
+        do_normalize: bool = False,
         image_mean: Union[float, List[float]] = None,
         image_std: Union[float, List[float]] = None,
         do_pad: bool = True,
