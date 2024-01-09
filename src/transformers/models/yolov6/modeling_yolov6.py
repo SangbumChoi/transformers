@@ -1003,8 +1003,6 @@ class Yolov6Head(nn.Module):
                     reg_output = reg_output.reshape([-1, 4, self.config.reg_max + 1, l]).permute(0, 2, 1, 3)
                     reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
 
-                cls_output = torch.sigmoid(cls_output)
-
                 if self.export:
                     cls_score_list.append(cls_output)
                     reg_dist_list.append(reg_output)

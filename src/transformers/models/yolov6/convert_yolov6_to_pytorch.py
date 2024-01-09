@@ -136,13 +136,15 @@ def convert_yolov6_checkpoint(
     print(logits.shape, pred_boxes.shape)
 
     expected_slice_logits, expected_slice_boxes = None, None
-    # if yolov6_name == "yolov6n":
-    #     expected_slice_logits = torch.tensor(
-    #         [[-39.5022, -11.9820, -17.6888], [-29.9574, -9.9769, -17.7691], [-42.3281, -20.7200, -30.6294]]
-    #     )
-    #     expected_slice_boxes = torch.tensor(
-    #         [[0.4021, 0.0836, 0.7979], [0.0184, 0.2609, 0.0364], [0.1781, 0.2004, 0.2095]]
-    #     )
+    if yolov6_name == "yolov6n":
+        expected_slice_logits = torch.tensor(
+            [[-39.5022, -11.9820, -17.6888], [-29.9574, -9.9769, -17.7691], [-42.3281, -20.7200, -30.6294]]
+        )
+        expected_slice_boxes = torch.tensor(
+            [[11.27861, 22.33572, 22.95666],
+            [23.49722, 20.68348, 47.31107],
+            [32.20158, 19.24104, 65.46049]]
+        )
     # elif yolov6_name == "yolos_s_200_pre":
     #     expected_slice_logits = torch.tensor(
     #         [[-24.0248, -10.3024, -14.8290], [-42.0392, -16.8200, -27.4334], [-27.2743, -11.8154, -18.7148]]
@@ -171,11 +173,11 @@ def convert_yolov6_checkpoint(
     #     expected_slice_boxes = torch.tensor(
     #         [[0.5555, 0.2794, 0.0655], [0.9049, 0.2664, 0.1894], [0.9183, 0.1984, 0.1635]]
     #     )
-    # else:
-    #     raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
+    else:
+        raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
 
-    # assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-4)
-    # assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-4)
+    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-4)
+    assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-4)
 
     Path(pytorch_dump_folder_path).mkdir(exist_ok=True)
     print(f"Saving model {yolov6_name} to {pytorch_dump_folder_path}")
