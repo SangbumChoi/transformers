@@ -219,7 +219,7 @@ class Yolov6ConvLayer(nn.Module):
             groups=groups,
             bias=bias,
         )
-        self.normalization = nn.BatchNorm2d(out_channels)
+        self.normalization = nn.BatchNorm2d(out_channels, eps=0.001, momentum=0.03)
         self.activation_type = activation_type
         self.activation = ACT2FN[activation_type] if activation_type is not None else nn.Identity()
 
@@ -814,6 +814,7 @@ class Yolov6Encoder(nn.Module):
                             in_channels=config.backbone_out_channels[i + 1],
                             out_channels=config.backbone_out_channels[i + 1],
                             kernel_size=5,
+                            activation_type="relu",
                         ),
                     )
             self.blocks.add_module(f"ERBlock_{i+2}", er_block)
@@ -1152,12 +1153,11 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
     def __init__(self, config: Yolov6Config):
         super().__init__(config)
 
-        # YOLOV6 backbone and neck model
+        # Yolov6 backbone and neck model
         self.model = Yolov6Model(config)
 
-        # Object detection heads
-        # We add one for the "no object" class
-        self.head = Yolov6Head(config)
+        # Yolov6 object detection heads
+        self.head = Yolov6Head(config)            
 
         # Initialize weights and apply final processing
         self.post_init()
