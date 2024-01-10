@@ -303,7 +303,7 @@ class Yolov6RepVGGBlock(nn.Module):
 
         else:
             self.rbr_identity = (
-                nn.BatchNorm2d(num_features=in_channels) if out_channels == in_channels and stride == 1 else None
+                nn.BatchNorm2d(num_features=in_channels, eps=0.001, momentum=0.03) if out_channels == in_channels and stride == 1 else None
             )
             self.rbr_dense = Yolov6ConvLayer(
                 in_channels=in_channels,
