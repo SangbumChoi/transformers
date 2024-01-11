@@ -57,6 +57,7 @@ from ...utils import (
     is_tf_tensor,
     is_torch_available,
     is_torch_tensor,
+    is_torchvision_available,
     is_vision_available,
     logging,
 )
@@ -65,6 +66,10 @@ from ...utils import (
 if is_torch_available():
     import torch
     from torch import nn
+
+
+if is_torchvision_available():
+    from torchvision.ops.boxes import batched_nms
 
 
 if is_vision_available():
@@ -1228,11 +1233,15 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         return encoded_inputs
 
     def post_process_object_detection(
-        self, outputs, threshold: float = 0.5, target_sizes: Union[TensorType, List[Tuple]] = None
+        self,
+        outputs,
+        threshold: float = 0.5,
+        target_sizes: Union[TensorType, List[Tuple]] = None,
+        nms_threshold: float = 0.45,
     ):
         """
         Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
-        bottom_right_x, bottom_right_y) format. Only supports PyTorch. 
+        bottom_right_x, bottom_right_y) format. Only supports PyTorch.
         Inspired from https://github.com/meituan/YOLOv6/blob/e9656c307ae62032f40b39c7a7a5ccc31c2f0242/yolov6/utils/nms.py#L31C1-L105C18
 
         Args:

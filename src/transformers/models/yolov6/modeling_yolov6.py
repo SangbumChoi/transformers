@@ -37,16 +37,15 @@ from ...utils import (
     is_vision_available,
     logging,
     replace_return_docstrings,
-    requires_backends,
 )
 from .configuration_yolov6 import Yolov6Config
 
 
 if is_scipy_available():
-    from scipy.optimize import linear_sum_assignment
+    pass
 
 if is_vision_available():
-    from transformers.image_transforms import center_to_corners_format
+    pass
 
 
 logger = logging.get_logger(__name__)
@@ -112,20 +111,6 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
-
-
-def dist2bbox(distance, anchor_points, box_format="xyxy"):
-    """Transform distance(ltrb) to box(xywh or xyxy)."""
-    lt, rb = torch.split(distance, 2, -1)
-    x1y1 = anchor_points - lt
-    x2y2 = anchor_points + rb
-    if box_format == "xyxy":
-        bbox = torch.cat([x1y1, x2y2], -1)
-    elif box_format == "xywh":
-        c_xy = (x1y1 + x2y2) / 2
-        wh = x2y2 - x1y1
-        bbox = torch.cat([c_xy, wh], -1)
-    return bbox
 
 
 def generate_anchors(
@@ -303,7 +288,9 @@ class Yolov6RepVGGBlock(nn.Module):
 
         else:
             self.rbr_identity = (
-                nn.BatchNorm2d(num_features=in_channels, eps=0.001, momentum=0.03) if out_channels == in_channels and stride == 1 else None
+                nn.BatchNorm2d(num_features=in_channels, eps=0.001, momentum=0.03)
+                if out_channels == in_channels and stride == 1
+                else None
             )
             self.rbr_dense = Yolov6ConvLayer(
                 in_channels=in_channels,
@@ -358,7 +345,7 @@ class Yolov6RepVGGBlock(nn.Module):
         if kernel1x1 is None:
             return 0
         else:
-            return torch.nn.functional.pad(kernel1x1, [1, 1, 1, 1])
+            return nn.functional.pad(kernel1x1, [1, 1, 1, 1])
 
     def _fuse_bn_tensor(self, branch):
         if branch is None:
@@ -722,7 +709,7 @@ class Yolov6Embeddings(nn.Module):
             block = Yolov6RepVGGBlock
         else:
             raise NotImplementedError
-            
+
         self.embedder = block(
             in_channels=config.in_channels,
             out_channels=config.backbone_out_channels[0],
@@ -959,7 +946,9 @@ class Yolov6Head(nn.Module):
             w.data.fill_(0.0)
             conv.weight = torch.nn.Parameter(w, requires_grad=True)
 
-        self.proj = nn.Parameter(torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1), requires_grad=False)
+        self.proj = nn.Parameter(
+            torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1), requires_grad=False
+        )
         self.proj_conv.weight = nn.Parameter(
             self.proj.view([1, self.config.reg_max_proj + 1, 1, 1]).clone().detach(),
             requires_grad=False,
@@ -1155,7 +1144,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
         self.model = Yolov6Model(config)
 
         # Yolov6 object detection heads
-        self.head = Yolov6Head(config)            
+        self.head = Yolov6Head(config)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1228,30 +1217,32 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
 
         loss, loss_dict = None, None
         if labels is not None:
-            # First: create the matcher
-            matcher = YolosHungarianMatcher(
-                class_cost=self.config.class_cost,
-                bbox_cost=self.config.bbox_cost,
-                giou_cost=self.config.giou_cost,
-            )
-            # Second: create the criterion
-            losses = ["labels", "boxes", "cardinality"]
+            losses = ["classes", "boxes"]
             criterion = Yolov6Loss(
-                matcher=matcher,
                 num_classes=self.config.num_labels,
-                eos_coef=self.config.eos_coefficient,
+                ori_img_size=self.config.img_size,
+                warmup_epoch=self.config.atss_warmup_epoch,
+                use_dfl=self.config.use_dfl,
+                reg_max=self.config.reg_max,
+                iou_type=self.config.iou_type,
+                fpn_strides=self.config.head_strides,
                 losses=losses,
             )
             criterion.to(self.device)
             # Third: compute the losses, based on outputs and labels
             outputs_loss = {}
+            outputs_loss["feats"] = feats
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
 
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
-            weight_dict = {"loss_ce": 1, "loss_bbox": self.config.bbox_loss_coefficient}
-            weight_dict["loss_giou"] = self.config.giou_loss_coefficient
+            weight_dict = {
+                "loss_cls": self.config.class_loss_coefficient,
+                "loss_iou": self.config.iou_loss_coefficient,
+                "loss_dfl": self.config.dfl_loss_coefficient,
+            }
+            weight_dict["loss_dfl"] = self.config.dfl_loss_coefficient
 
             loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
@@ -1324,7 +1315,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
 # Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->Yolos
 class Yolov6Loss(nn.Module):
     """
-    This class computes the losses for YolosForObjectDetection/YolosForSegmentation. The process happens in two steps: 1)
+    This class computes the losses for Yolov6ForObjectDetection. The process happens in two steps: 1)
     we compute hungarian assignment between ground truth boxes and the outputs of the model 2) we supervise each pair
     of matched ground-truth / prediction (supervise class and box).
 
@@ -1347,58 +1338,72 @@ class Yolov6Loss(nn.Module):
             List of all the losses to be applied. See `get_loss` for a list of all available losses.
     """
 
-    def __init__(self, matcher, num_classes, eos_coef, losses):
+    def __init__(
+        self,
+        num_classes,
+        ori_img_size,
+        warmup_epoch,
+        use_dfl,
+        reg_max,
+        iou_type,
+        fpn_strides,
+        losses,
+        grid_cell_size=5.0,
+        grid_cell_offset=0.5,
+    ):
         super().__init__()
-        self.matcher = matcher
+        self.fpn_strides = fpn_strides
+        self.cached_feat_sizes = [torch.Size([0, 0]) for _ in fpn_strides]
+        self.cached_anchors = None
+        self.grid_cell_size = grid_cell_size
+        self.grid_cell_offset = grid_cell_offset
         self.num_classes = num_classes
-        self.eos_coef = eos_coef
+        self.ori_img_size = ori_img_size
         self.losses = losses
-        empty_weight = torch.ones(self.num_classes + 1)
-        empty_weight[-1] = self.eos_coef
-        self.register_buffer("empty_weight", empty_weight)
+
+        self.warmup_epoch = warmup_epoch
+        self.warmup_assigner = ATSSAssigner(9, num_classes=self.num_classes)
+        self.formal_assigner = TaskAlignedAssigner(topk=13, num_classes=self.num_classes, alpha=1.0, beta=6.0)
+
+        self.use_dfl = use_dfl
+        self.reg_max = reg_max
+
+        self.iou_type = "giou"
+        self.box_format = "xyxy"
 
     # removed logging parameter, which was part of the original implementation
-    def loss_labels(self, outputs, targets, indices, num_boxes):
+    def loss_classes(self, outputs, targets, fg_mask, target_scores_sum):
         """
         Classification loss (NLL) targets dicts must contain the key "class_labels" containing a tensor of dim
         [nb_target_boxes]
         """
-        if "logits" not in outputs:
+        if "logits" not in outputs and "target_scores" not in targets and "target_labels" not in targets:
             raise KeyError("No logits were found in the outputs")
-        source_logits = outputs["logits"]
 
-        idx = self._get_source_permutation_idx(indices)
-        target_classes_o = torch.cat([t["class_labels"][J] for t, (_, J) in zip(targets, indices)])
-        target_classes = torch.full(
-            source_logits.shape[:2],
-            self.num_classes,
-            dtype=torch.int64,
-            device=source_logits.device,
-        )
-        target_classes[idx] = target_classes_o
+        gamma = 2.0
+        alpha = 0.75
 
-        loss_ce = nn.functional.cross_entropy(source_logits.transpose(1, 2), target_classes, self.empty_weight)
-        losses = {"loss_ce": loss_ce}
+        target_scores = targets["target_scores"]
+        target_labels = targets["target_labels"]
+        one_hot_label = nn.functional.one_hot(target_labels.long(), self.num_classes + 1)[..., :-1]
+
+        pred_scores = outputs["pred_scores"]
+
+        weight = alpha * pred_scores.pow(gamma) * (1 - one_hot_label) + target_scores * one_hot_label
+        with torch.cuda.amp.autocast(enabled=False):
+            loss_classes = (
+                nn.functional.binary_cross_entropy(pred_scores.float(), target_scores.float(), reduction="none")
+                * weight
+            ).sum()
+
+        if target_scores_sum > 1:
+            loss_classes /= target_scores_sum
+
+        losses = {"loss_classes": loss_classes}
 
         return losses
 
-    @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes):
-        """
-        Compute the cardinality error, i.e. the absolute error in the number of predicted non-empty boxes.
-
-        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients.
-        """
-        logits = outputs["logits"]
-        device = logits.device
-        target_lengths = torch.as_tensor([len(v["class_labels"]) for v in targets], device=device)
-        # Count the number of predictions that are NOT "no-object" (which is the last class)
-        card_pred = (logits.argmax(-1) != logits.shape[-1] - 1).sum(1)
-        card_err = nn.functional.l1_loss(card_pred.float(), target_lengths.float())
-        losses = {"cardinality_error": card_err}
-        return losses
-
-    def loss_boxes(self, outputs, targets, indices, num_boxes):
+    def loss_boxes(self, outputs, targets, fg_mask, target_scores_sum):
         """
         Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss.
 
@@ -1407,81 +1412,149 @@ class Yolov6Loss(nn.Module):
         """
         if "pred_boxes" not in outputs:
             raise KeyError("No predicted boxes found in outputs")
-        idx = self._get_source_permutation_idx(indices)
-        source_boxes = outputs["pred_boxes"][idx]
-        target_boxes = torch.cat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_scores = targets["target_scores"]
+        target_bboxes = targets["target_bboxes"]
+        pred_bboxes = outputs["pred_bboxes"]
+        pred_dist = outputs["pred_boxes"]
+        anchor_points = outputs["anchor_points"]
 
-        loss_bbox = nn.functional.l1_loss(source_boxes, target_boxes, reduction="none")
+        # select positive samples mask
+        num_pos = fg_mask.sum()
+        if num_pos > 0:
+            # iou loss
+            bbox_mask = fg_mask.unsqueeze(-1).repeat([1, 1, 4])
+            pred_bboxes_pos = torch.masked_select(pred_bboxes, bbox_mask).reshape([-1, 4])
+            target_bboxes_pos = torch.masked_select(target_bboxes, bbox_mask).reshape([-1, 4])
+            bbox_weight = torch.masked_select(target_scores.sum(-1), fg_mask).unsqueeze(-1)
+            loss_iou = self.iou_loss(pred_bboxes_pos, target_bboxes_pos) * bbox_weight
+
+            # dfl loss
+            if self.use_dfl:
+                dist_mask = fg_mask.unsqueeze(-1).repeat([1, 1, (self.reg_max + 1) * 4])
+                pred_dist_pos = torch.masked_select(pred_dist, dist_mask).reshape([-1, 4, self.reg_max + 1])
+                target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
+                target_ltrb_pos = torch.masked_select(target_ltrb, bbox_mask).reshape([-1, 4])
+                loss_dfl = self._df_loss(pred_dist_pos, target_ltrb_pos) * bbox_weight
+            else:
+                loss_dfl = pred_dist.sum() * 0.0
+
+        else:
+            loss_iou = pred_dist.sum() * 0.0
+            loss_dfl = pred_dist.sum() * 0.0
 
         losses = {}
-        losses["loss_bbox"] = loss_bbox.sum() / num_boxes
-
-        loss_giou = 1 - torch.diag(
-            generalized_box_iou(
-                center_to_corners_format(source_boxes),
-                center_to_corners_format(target_boxes),
-            )
-        )
-        losses["loss_giou"] = loss_giou.sum() / num_boxes
+        losses["loss_iou"] = loss_iou.sum() / target_scores_sum
+        losses["loss_dfl"] = loss_dfl.sum() / target_scores_sum
         return losses
 
-    def loss_masks(self, outputs, targets, indices, num_boxes):
+    def _iou_loss(self, box1, box2):
+        """ calculate iou. box1 and box2 are torch tensor with shape [M, 4] and [Nm 4].
         """
-        Compute the losses related to the masks: the focal loss and the dice loss.
+        if box1.shape[0] != box2.shape[0]:
+            box2 = box2.T
+            if self.box_format == 'xyxy':
+                b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
+                b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
+            elif self.box_format == 'xywh':
+                b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
+                b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
+                b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
+                b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
+        else:
+            if self.box_format == 'xyxy':
+                b1_x1, b1_y1, b1_x2, b1_y2 = torch.split(box1, 1, dim=-1)
+                b2_x1, b2_y1, b2_x2, b2_y2 = torch.split(box2, 1, dim=-1)
 
-        Targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w].
-        """
-        if "pred_masks" not in outputs:
-            raise KeyError("No predicted masks found in outputs")
+            elif self.box_format == 'xywh':
+                b1_x1, b1_y1, b1_w, b1_h = torch.split(box1, 1, dim=-1)
+                b2_x1, b2_y1, b2_w, b2_h = torch.split(box2, 1, dim=-1)
+                b1_x1, b1_x2 = b1_x1 - b1_w / 2, b1_x1 + b1_w / 2
+                b1_y1, b1_y2 = b1_y1 - b1_h / 2, b1_y1 + b1_h / 2
+                b2_x1, b2_x2 = b2_x1 - b2_w / 2, b2_x1 + b2_w / 2
+                b2_y1, b2_y2 = b2_y1 - b2_h / 2, b2_y1 + b2_h / 2
 
-        source_idx = self._get_source_permutation_idx(indices)
-        target_idx = self._get_target_permutation_idx(indices)
-        source_masks = outputs["pred_masks"]
-        source_masks = source_masks[source_idx]
-        masks = [t["masks"] for t in targets]
-        # TODO use valid to mask invalid areas due to padding in loss
-        target_masks, valid = nested_tensor_from_tensor_list(masks).decompose()
-        target_masks = target_masks.to(source_masks)
-        target_masks = target_masks[target_idx]
+        # Intersection area
+        inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
+                (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
 
-        # upsample predictions to the target size
-        source_masks = nn.functional.interpolate(
-            source_masks[:, None],
-            size=target_masks.shape[-2:],
-            mode="bilinear",
-            align_corners=False,
-        )
-        source_masks = source_masks[:, 0].flatten(1)
+        # Union Area
+        w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + self.eps
+        w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + self.eps
+        union = w1 * h1 + w2 * h2 - inter + self.eps
+        iou = inter / union
 
-        target_masks = target_masks.flatten(1)
-        target_masks = target_masks.view(source_masks.shape)
-        losses = {
-            "loss_mask": sigmoid_focal_loss(source_masks, target_masks, num_boxes),
-            "loss_dice": dice_loss(source_masks, target_masks, num_boxes),
-        }
-        return losses
+        cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex width
+        ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
+        if self.iou_type == 'giou':
+            c_area = cw * ch + self.eps  # convex area
+            iou = iou - (c_area - union) / c_area
+        elif self.iou_type in ['diou', 'ciou']:
+            c2 = cw ** 2 + ch ** 2 + self.eps  # convex diagonal squared
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 +
+                    (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # center distance squared
+            if self.iou_type == 'diou':
+                iou = iou - rho2 / c2
+            elif self.iou_type == 'ciou':
+                v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
+                with torch.no_grad():
+                    alpha = v / (v - iou + (1 + self.eps))
+                iou = iou - (rho2 / c2 + v * alpha)
+        elif self.iou_type == 'siou':
+            # SIoU Loss https://arxiv.org/pdf/2205.12740.pdf
+            s_cw = (b2_x1 + b2_x2 - b1_x1 - b1_x2) * 0.5 + self.eps
+            s_ch = (b2_y1 + b2_y2 - b1_y1 - b1_y2) * 0.5 + self.eps
+            sigma = torch.pow(s_cw ** 2 + s_ch ** 2, 0.5)
+            sin_alpha_1 = torch.abs(s_cw) / sigma
+            sin_alpha_2 = torch.abs(s_ch) / sigma
+            threshold = pow(2, 0.5) / 2
+            sin_alpha = torch.where(sin_alpha_1 > threshold, sin_alpha_2, sin_alpha_1)
+            angle_cost = torch.cos(torch.arcsin(sin_alpha) * 2 - math.pi / 2)
+            rho_x = (s_cw / cw) ** 2
+            rho_y = (s_ch / ch) ** 2
+            gamma = angle_cost - 2
+            distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
+            omiga_w = torch.abs(w1 - w2) / torch.max(w1, w2)
+            omiga_h = torch.abs(h1 - h2) / torch.max(h1, h2)
+            shape_cost = torch.pow(1 - torch.exp(-1 * omiga_w), 4) + torch.pow(1 - torch.exp(-1 * omiga_h), 4)
+            iou = iou - 0.5 * (distance_cost + shape_cost)
+        loss = 1.0 - iou
 
-    def _get_source_permutation_idx(self, indices):
-        # permute predictions following indices
-        batch_idx = torch.cat([torch.full_like(source, i) for i, (source, _) in enumerate(indices)])
-        source_idx = torch.cat([source for (source, _) in indices])
-        return batch_idx, source_idx
+        if self.reduction == 'sum':
+            loss = loss.sum()
+        elif self.reduction == 'mean':
+            loss = loss.mean()
 
-    def _get_target_permutation_idx(self, indices):
-        # permute targets following indices
-        batch_idx = torch.cat([torch.full_like(target, i) for i, (_, target) in enumerate(indices)])
-        target_idx = torch.cat([target for (_, target) in indices])
-        return batch_idx, target_idx
+        return loss
 
-    def get_loss(self, loss, outputs, targets, indices, num_boxes):
+    def _df_loss(self, pred_dist, target):
+        target_left = target.to(torch.long)
+        target_right = target_left + 1
+        weight_left = target_right.to(torch.float) - target
+        weight_right = 1 - weight_left
+        loss_left = F.cross_entropy(
+            pred_dist.view(-1, self.reg_max + 1), target_left.view(-1), reduction='none').view(
+            target_left.shape) * weight_left
+        loss_right = F.cross_entropy(
+            pred_dist.view(-1, self.reg_max + 1), target_right.view(-1), reduction='none').view(
+            target_left.shape) * weight_right
+        return (loss_left + loss_right).mean(-1, keepdim=True)
+
+    def bbox_decode(self, anchor_points, pred_dist):
+        if self.use_dfl:
+            batch_size, n_anchors, _ = pred_dist.shape
+            pred_dist = nn.functional.softmax(
+                pred_dist.view(batch_size, n_anchors, 4, self.reg_max + 1), dim=-1
+            ).matmul(self.proj.to(pred_dist.device))
+        return dist2bbox(pred_dist, anchor_points)
+
+    def get_loss(self, loss, outputs, targets, fg_mask, target_scores_sum):
         loss_map = {
-            "labels": self.loss_labels,
+            "classes": self.loss_classes,
             "boxes": self.loss_boxes,
-            "dfl": self.loss_dfl,
         }
         if loss not in loss_map:
             raise ValueError(f"Loss {loss} not supported")
-        return loss_map[loss](outputs, targets, indices, num_boxes)
+        return loss_map[loss](outputs, targets, fg_mask, target_scores_sum)
 
     def forward(self, outputs, targets):
         """
@@ -1494,145 +1567,341 @@ class Yolov6Loss(nn.Module):
                 List of dicts, such that `len(targets) == batch_size`. The expected keys in each dict depends on the
                 losses applied, see each loss' doc.
         """
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != "auxiliary_outputs"}
+        feats, logits, pred_distri = outputs["feats"], outputs["logits"], outputs["pred_boxes"]
+        print('1571', pred_distri.device, pred_distri.shape)
+        pred_scores = logits.sigmoid()
+        outputs["pred_scores"] = pred_scores
 
-        # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets)
+        if all(feat.shape[2:] == cfsize for feat, cfsize in zip(feats, self.cached_feat_sizes)):
+            anchors, anchor_points, n_anchors_list, stride_tensor = self.cached_anchors
+        else:
+            self.cached_feat_sizes = [feat.shape[2:] for feat in feats]
+            anchors, anchor_points, n_anchors_list, stride_tensor = generate_anchors(
+                feats, self.fpn_strides, self.grid_cell_size, self.grid_cell_offset, device=feats[0].device
+            )
+            self.cached_anchors = anchors, anchor_points, n_anchors_list, stride_tensor
 
-        # Compute the average number of target boxes across all nodes, for normalization purposes
-        num_boxes = sum(len(t["class_labels"]) for t in targets)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-        # (Niels): comment out function below, distributed training to be added
-        # if is_dist_avail_and_initialized():
-        #     torch.distributed.all_reduce(num_boxes)
-        # (Niels) in original implementation, num_boxes is divided by get_world_size()
-        num_boxes = torch.clamp(num_boxes, min=1).item()
+        assert pred_scores.type() == pred_distri.type()
+        outputs["anchor_points"] = anchor_points
+        # gt_bboxes_scale = torch.tensor([batch_width, batch_height, batch_width, batch_height]).type_as(pred_scores)
+        # batch_size = pred_scores.shape[0]
+
+        # targets
+        # targets =self.preprocess(targets, batch_size, gt_bboxes_scale)
+        # gt_labels = targets[:, :, :1]
+        # gt_bboxes = targets[:, :, 1:] #xyxy
+        # Also concat the target labels and boxes
+        max_size = max(v["class_labels"].size(0) for v in targets)
+        gt_labels = torch.stack([torch.cat([v["class_labels"], -torch.ones(max_size - v["class_labels"].size(0), dtype=v["class_labels"].dtype).to(v["class_labels"].device)]) for v in targets])
+        gt_bboxes = torch.stack([torch.cat([v["boxes"], torch.zeros(max_size - v["boxes"].size(0), dtype=v["boxes"].dtype).to(v["boxes"].device)]) for v in targets])
+
+        # gt_labels = torch.cat([v["class_labels"] for v in targets])
+        # gt_bboxes = torch.cat([v["boxes"] for v in targets])
+        print('line1605', gt_bboxes.shape)
+        mask_gt = (gt_bboxes.sum(-1, keepdim=True) > 0).float()
+
+        # pboxes
+        anchor_points_s = anchor_points / stride_tensor
+        print('1605', anchor_points_s.device)
+        pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
+        outputs["pred_bboxes"] = pred_bboxes
+        print(pred_bboxes.device, gt_bboxes.device)
+
+        target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
+            pred_scores.detach(), pred_bboxes.detach() * stride_tensor, anchor_points, gt_labels, gt_bboxes, mask_gt
+        )
+
+        # rescale bbox
+        target_bboxes /= stride_tensor
+
+        # cls loss
+        target_labels = torch.where(fg_mask > 0, target_labels, torch.full_like(target_labels, self.num_classes))
+
+        targets_ = {}
+        targets_["target_scores"] = target_scores
+        targets_["target_labels"] = target_labels
+        targets_["target_bboxes"] = target_bboxes
+
+        target_scores_sum = target_scores.sum()
 
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
-
-        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
-        if "auxiliary_outputs" in outputs:
-            for i, auxiliary_outputs in enumerate(outputs["auxiliary_outputs"]):
-                indices = self.matcher(auxiliary_outputs, targets)
-                for loss in self.losses:
-                    if loss == "masks":
-                        # Intermediate masks losses are too costly to compute, we ignore them.
-                        continue
-                    l_dict = self.get_loss(loss, auxiliary_outputs, targets, indices, num_boxes)
-                    l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
-                    losses.update(l_dict)
+            losses.update(self.get_loss(loss, outputs, targets_, fg_mask, target_scores_sum))
 
         return losses
 
 
-# Copied from transformers.models.detr.modeling_detr.DetrMLPPredictionHead with Detr->Yolos
-class YolosMLPPredictionHead(nn.Module):
-    """
-    Very simple multi-layer perceptron (MLP, also called FFN), used to predict the normalized center coordinates,
-    height and width of a bounding box w.r.t. an image.
+# Copied from https://github.com/meituan/YOLOv6/blob/87dd3d3963b6b373ccdc626b9bae5a2afec5639e/yolov6/assigners/atss_assigner.py#L7
+class ATSSAssigner(nn.Module):
+    """Adaptive Training Sample Selection Assigner"""
 
-    Copied from https://github.com/facebookresearch/detr/blob/master/models/detr.py
-
-    """
-
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-        super().__init__()
-        self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
-
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            x = nn.functional.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        return x
-
-
-# Copied from transformers.models.detr.modeling_detr.DetrHungarianMatcher with Detr->Yolos
-class YolosHungarianMatcher(nn.Module):
-    """
-    This class computes an assignment between the targets and the predictions of the network.
-
-    For efficiency reasons, the targets don't include the no_object. Because of this, in general, there are more
-    predictions than targets. In this case, we do a 1-to-1 matching of the best predictions, while the others are
-    un-matched (and thus treated as non-objects).
-
-    Args:
-        class_cost:
-            The relative weight of the classification error in the matching cost.
-        bbox_cost:
-            The relative weight of the L1 error of the bounding box coordinates in the matching cost.
-        giou_cost:
-            The relative weight of the giou loss of the bounding box in the matching cost.
-    """
-
-    def __init__(self, class_cost: float = 1, bbox_cost: float = 1, giou_cost: float = 1):
-        super().__init__()
-        requires_backends(self, ["scipy"])
-
-        self.class_cost = class_cost
-        self.bbox_cost = bbox_cost
-        self.giou_cost = giou_cost
-        if class_cost == 0 and bbox_cost == 0 and giou_cost == 0:
-            raise ValueError("All costs of the Matcher can't be 0")
+    def __init__(self, topk=9, num_classes=80):
+        super(ATSSAssigner, self).__init__()
+        self.topk = topk
+        self.num_classes = num_classes
+        self.bg_idx = num_classes
 
     @torch.no_grad()
-    def forward(self, outputs, targets):
-        """
+    def forward(self, anc_bboxes, n_level_bboxes, gt_labels, gt_bboxes, mask_gt, pd_bboxes):
+        r"""This code is based on
+            https://github.com/fcjian/TOOD/blob/master/mmdet/core/bbox/assigners/atss_assigner.py
+
         Args:
-            outputs (`dict`):
-                A dictionary that contains at least these entries:
-                * "logits": Tensor of dim [batch_size, num_queries, num_classes] with the classification logits
-                * "pred_boxes": Tensor of dim [batch_size, num_queries, 4] with the predicted box coordinates.
-            targets (`List[dict]`):
-                A list of targets (len(targets) = batch_size), where each target is a dict containing:
-                * "class_labels": Tensor of dim [num_target_boxes] (where num_target_boxes is the number of
-                  ground-truth
-                 objects in the target) containing the class labels
-                * "boxes": Tensor of dim [num_target_boxes, 4] containing the target box coordinates.
-
+            anc_bboxes (Tensor): shape(num_total_anchors, 4)
+            n_level_bboxes (List):len(3)
+            gt_labels (Tensor): shape(bs, n_max_boxes, 1)
+            gt_bboxes (Tensor): shape(bs, n_max_boxes, 4)
+            mask_gt (Tensor): shape(bs, n_max_boxes, 1)
+            pd_bboxes (Tensor): shape(bs, n_max_boxes, 4)
         Returns:
-            `List[Tuple]`: A list of size `batch_size`, containing tuples of (index_i, index_j) where:
-            - index_i is the indices of the selected predictions (in order)
-            - index_j is the indices of the corresponding selected targets (in order)
-            For each batch element, it holds: len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
+            target_labels (Tensor): shape(bs, num_total_anchors)
+            target_bboxes (Tensor): shape(bs, num_total_anchors, 4)
+            target_scores (Tensor): shape(bs, num_total_anchors, num_classes)
+            fg_mask (Tensor): shape(bs, num_total_anchors)
         """
-        batch_size, num_queries = outputs["logits"].shape[:2]
+        self.n_anchors = anc_bboxes.size(0)
+        self.bs = gt_bboxes.size(0)
+        self.n_max_boxes = gt_bboxes.size(1)
 
-        # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["logits"].flatten(0, 1).softmax(-1)  # [batch_size * num_queries, num_classes]
-        out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
-
-        # Also concat the target labels and boxes
-        target_ids = torch.cat([v["class_labels"] for v in targets])
-        target_bbox = torch.cat([v["boxes"] for v in targets])
-
-        # Compute the classification cost. Contrary to the loss, we don't use the NLL,
-        # but approximate it in 1 - proba[target class].
-        # The 1 is a constant that doesn't change the matching, it can be ommitted.
-        class_cost = -out_prob[:, target_ids]
-
-        # Compute the L1 cost between boxes
-        bbox_cost = torch.cdist(out_bbox, target_bbox, p=1)
-
-        # Compute the giou cost between boxes
-        giou_cost = -generalized_box_iou(center_to_corners_format(out_bbox), center_to_corners_format(target_bbox))
-
-        # Final cost matrix
-        cost_matrix = self.bbox_cost * bbox_cost + self.class_cost * class_cost + self.giou_cost * giou_cost
-        cost_matrix = cost_matrix.view(batch_size, num_queries, -1).cpu()
-
-        sizes = [len(v["boxes"]) for v in targets]
-        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(cost_matrix.split(sizes, -1))]
-        return [
-            (
-                torch.as_tensor(i, dtype=torch.int64),
-                torch.as_tensor(j, dtype=torch.int64),
+        if self.n_max_boxes == 0:
+            device = gt_bboxes.device
+            return (
+                torch.full([self.bs, self.n_anchors], self.bg_idx).to(device),
+                torch.zeros([self.bs, self.n_anchors, 4]).to(device),
+                torch.zeros([self.bs, self.n_anchors, self.num_classes]).to(device),
+                torch.zeros([self.bs, self.n_anchors]).to(device),
             )
-            for i, j in indices
-        ]
+
+        overlaps = iou2d_calculator(gt_bboxes.reshape([-1, 4]), anc_bboxes)
+        overlaps = overlaps.reshape([self.bs, -1, self.n_anchors])
+
+        distances, ac_points = dist_calculator(gt_bboxes.reshape([-1, 4]), anc_bboxes)
+        distances = distances.reshape([self.bs, -1, self.n_anchors])
+
+        is_in_candidate, candidate_idxs = self.select_topk_candidates(distances, n_level_bboxes, mask_gt)
+
+        overlaps_thr_per_gt, iou_candidates = self.thres_calculator(is_in_candidate, candidate_idxs, overlaps)
+
+        # select candidates iou >= threshold as positive
+        is_pos = torch.where(
+            iou_candidates > overlaps_thr_per_gt.repeat([1, 1, self.n_anchors]),
+            is_in_candidate,
+            torch.zeros_like(is_in_candidate),
+        )
+
+        is_in_gts = select_candidates_in_gts(ac_points, gt_bboxes)
+        mask_pos = is_pos * is_in_gts * mask_gt
+
+        target_gt_idx, fg_mask, mask_pos = select_highest_overlaps(mask_pos, overlaps, self.n_max_boxes)
+
+        # assigned target
+        target_labels, target_bboxes, target_scores = self.get_targets(gt_labels, gt_bboxes, target_gt_idx, fg_mask)
+
+        # soft label with iou
+        if pd_bboxes is not None:
+            ious = iou_calculator(gt_bboxes, pd_bboxes) * mask_pos
+            ious = ious.max(axis=-2)[0].unsqueeze(-1)
+            target_scores *= ious
+
+        return target_labels.long(), target_bboxes, target_scores, fg_mask.bool()
+
+    def select_topk_candidates(self, distances, n_level_bboxes, mask_gt):
+        mask_gt = mask_gt.repeat(1, 1, self.topk).bool()
+        level_distances = torch.split(distances, n_level_bboxes, dim=-1)
+        is_in_candidate_list = []
+        candidate_idxs = []
+        start_idx = 0
+        for per_level_distances, per_level_boxes in zip(level_distances, n_level_bboxes):
+            end_idx = start_idx + per_level_boxes
+            selected_k = min(self.topk, per_level_boxes)
+            _, per_level_topk_idxs = per_level_distances.topk(selected_k, dim=-1, largest=False)
+            candidate_idxs.append(per_level_topk_idxs + start_idx)
+            per_level_topk_idxs = torch.where(mask_gt, per_level_topk_idxs, torch.zeros_like(per_level_topk_idxs))
+            is_in_candidate = nn.functional.one_hot(per_level_topk_idxs, per_level_boxes).sum(dim=-2)
+            is_in_candidate = torch.where(is_in_candidate > 1, torch.zeros_like(is_in_candidate), is_in_candidate)
+            is_in_candidate_list.append(is_in_candidate.to(distances.dtype))
+            start_idx = end_idx
+
+        is_in_candidate_list = torch.cat(is_in_candidate_list, dim=-1)
+        candidate_idxs = torch.cat(candidate_idxs, dim=-1)
+
+        return is_in_candidate_list, candidate_idxs
+
+    def thres_calculator(self, is_in_candidate, candidate_idxs, overlaps):
+        n_bs_max_boxes = self.bs * self.n_max_boxes
+        _candidate_overlaps = torch.where(is_in_candidate > 0, overlaps, torch.zeros_like(overlaps))
+        candidate_idxs = candidate_idxs.reshape([n_bs_max_boxes, -1])
+        assist_idxs = self.n_anchors * torch.arange(n_bs_max_boxes, device=candidate_idxs.device)
+        assist_idxs = assist_idxs[:, None]
+        faltten_idxs = candidate_idxs + assist_idxs
+        candidate_overlaps = _candidate_overlaps.reshape(-1)[faltten_idxs]
+        candidate_overlaps = candidate_overlaps.reshape([self.bs, self.n_max_boxes, -1])
+
+        overlaps_mean_per_gt = candidate_overlaps.mean(axis=-1, keepdim=True)
+        overlaps_std_per_gt = candidate_overlaps.std(axis=-1, keepdim=True)
+        overlaps_thr_per_gt = overlaps_mean_per_gt + overlaps_std_per_gt
+
+        return overlaps_thr_per_gt, _candidate_overlaps
+
+    def get_targets(self, gt_labels, gt_bboxes, target_gt_idx, fg_mask):
+        # assigned target labels
+        batch_idx = torch.arange(self.bs, dtype=gt_labels.dtype, device=gt_labels.device)
+        batch_idx = batch_idx[..., None]
+        target_gt_idx = (target_gt_idx + batch_idx * self.n_max_boxes).long()
+        target_labels = gt_labels.flatten()[target_gt_idx.flatten()]
+        target_labels = target_labels.reshape([self.bs, self.n_anchors])
+        target_labels = torch.where(fg_mask > 0, target_labels, torch.full_like(target_labels, self.bg_idx))
+
+        # assigned target boxes
+        target_bboxes = gt_bboxes.reshape([-1, 4])[target_gt_idx.flatten()]
+        target_bboxes = target_bboxes.reshape([self.bs, self.n_anchors, 4])
+
+        # assigned target scores
+        target_scores = nn.functional.one_hot(target_labels.long(), self.num_classes + 1).float()
+        target_scores = target_scores[:, :, : self.num_classes]
+
+        return target_labels, target_bboxes, target_scores
+
+
+# Copied from https://github.com/meituan/YOLOv6/blob/87dd3d3963b6b373ccdc626b9bae5a2afec5639e/yolov6/assigners/tal_assigner.py#L6
+class TaskAlignedAssigner(nn.Module):
+    def __init__(self, topk=13, num_classes=80, alpha=1.0, beta=6.0, eps=1e-9):
+        super(TaskAlignedAssigner, self).__init__()
+        self.topk = topk
+        self.num_classes = num_classes
+        self.bg_idx = num_classes
+        self.alpha = alpha
+        self.beta = beta
+        self.eps = eps
+
+    @torch.no_grad()
+    def forward(self, pd_scores, pd_bboxes, anc_points, gt_labels, gt_bboxes, mask_gt):
+        """This code referenced to
+           https://github.com/Nioolek/PPYOLOE_pytorch/blob/master/ppyoloe/assigner/tal_assigner.py
+
+        Args:
+            pd_scores (Tensor): shape(bs, num_total_anchors, num_classes)
+            pd_bboxes (Tensor): shape(bs, num_total_anchors, 4)
+            anc_points (Tensor): shape(num_total_anchors, 2)
+            gt_labels (Tensor): shape(bs, n_max_boxes, 1)
+            gt_bboxes (Tensor): shape(bs, n_max_boxes, 4)
+            mask_gt (Tensor): shape(bs, n_max_boxes, 1)
+        Returns:
+            target_labels (Tensor): shape(bs, num_total_anchors)
+            target_bboxes (Tensor): shape(bs, num_total_anchors, 4)
+            target_scores (Tensor): shape(bs, num_total_anchors, num_classes)
+            fg_mask (Tensor): shape(bs, num_total_anchors)
+        """
+        self.bs = pd_scores.size(0)
+        self.n_max_boxes = gt_bboxes.size(1)
+        print('lin1797', gt_bboxes.shape)
+
+        if self.n_max_boxes == 0:
+            device = gt_bboxes.device
+            return (
+                torch.full_like(pd_scores[..., 0], self.bg_idx).to(device),
+                torch.zeros_like(pd_bboxes).to(device),
+                torch.zeros_like(pd_scores).to(device),
+                torch.zeros_like(pd_scores[..., 0]).to(device),
+            )
+
+        cycle, step, self.bs = (1, self.bs, self.bs) if self.n_max_boxes <= 100 else (self.bs, 1, 1)
+        target_labels_lst, target_bboxes_lst, target_scores_lst, fg_mask_lst = [], [], [], []
+        # loop batch dim in case of numerous object box
+        for i in range(cycle):
+            start, end = i * step, (i + 1) * step
+            pd_scores_ = pd_scores[start:end, ...]
+            pd_bboxes_ = pd_bboxes[start:end, ...]
+            gt_labels_ = gt_labels[start:end, ...]
+            gt_bboxes_ = gt_bboxes[start:end, ...]
+            mask_gt_ = mask_gt[start:end, ...]
+
+            mask_pos, align_metric, overlaps = self.get_pos_mask(
+                pd_scores_, pd_bboxes_, gt_labels_, gt_bboxes_, anc_points, mask_gt_
+            )
+
+            target_gt_idx, fg_mask, mask_pos = select_highest_overlaps(mask_pos, overlaps, self.n_max_boxes)
+
+            # assigned target
+            target_labels, target_bboxes, target_scores = self.get_targets(
+                gt_labels_, gt_bboxes_, target_gt_idx, fg_mask
+            )
+
+            # normalize
+            align_metric *= mask_pos
+            pos_align_metrics = align_metric.max(axis=-1, keepdim=True)[0]
+            pos_overlaps = (overlaps * mask_pos).max(axis=-1, keepdim=True)[0]
+            norm_align_metric = (align_metric * pos_overlaps / (pos_align_metrics + self.eps)).max(-2)[0].unsqueeze(-1)
+            target_scores = target_scores * norm_align_metric
+
+            # append
+            target_labels_lst.append(target_labels)
+            target_bboxes_lst.append(target_bboxes)
+            target_scores_lst.append(target_scores)
+            fg_mask_lst.append(fg_mask)
+
+        # concat
+        target_labels = torch.cat(target_labels_lst, 0)
+        target_bboxes = torch.cat(target_bboxes_lst, 0)
+        target_scores = torch.cat(target_scores_lst, 0)
+        fg_mask = torch.cat(fg_mask_lst, 0)
+
+        return target_labels, target_bboxes, target_scores, fg_mask.bool()
+
+    def get_pos_mask(self, pd_scores, pd_bboxes, gt_labels, gt_bboxes, anc_points, mask_gt):
+        # get anchor_align metric
+        align_metric, overlaps = self.get_box_metrics(pd_scores, pd_bboxes, gt_labels, gt_bboxes)
+        # get in_gts mask
+        mask_in_gts = select_candidates_in_gts(anc_points, gt_bboxes)
+        # get topk_metric mask
+        mask_topk = self.select_topk_candidates(
+            align_metric * mask_in_gts, topk_mask=mask_gt.repeat([1, 1, self.topk]).bool()
+        )
+        # merge all mask to a final mask
+        mask_pos = mask_topk * mask_in_gts * mask_gt
+
+        return mask_pos, align_metric, overlaps
+
+    def get_box_metrics(self, pd_scores, pd_bboxes, gt_labels, gt_bboxes):
+        pd_scores = pd_scores.permute(0, 2, 1)
+        gt_labels = gt_labels.to(torch.long)
+        ind = torch.zeros([2, self.bs, self.n_max_boxes], dtype=torch.long)
+        ind[0] = torch.arange(end=self.bs).view(-1, 1).repeat(1, self.n_max_boxes)
+        ind[1] = gt_labels.squeeze(-1)
+        bbox_scores = pd_scores[ind[0], ind[1]]
+
+        overlaps = iou_calculator(gt_bboxes, pd_bboxes)
+        align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
+
+        return align_metric, overlaps
+
+    def select_topk_candidates(self, metrics, largest=True, topk_mask=None):
+        num_anchors = metrics.shape[-1]
+        topk_metrics, topk_idxs = torch.topk(metrics, self.topk, axis=-1, largest=largest)
+        if topk_mask is None:
+            topk_mask = (topk_metrics.max(axis=-1, keepdim=True) > self.eps).tile([1, 1, self.topk])
+        topk_idxs = torch.where(topk_mask, topk_idxs, torch.zeros_like(topk_idxs))
+        is_in_topk = nn.functional.one_hot(topk_idxs, num_anchors).sum(axis=-2)
+        is_in_topk = torch.where(is_in_topk > 1, torch.zeros_like(is_in_topk), is_in_topk)
+        return is_in_topk.to(metrics.dtype)
+
+    def get_targets(self, gt_labels, gt_bboxes, target_gt_idx, fg_mask):
+        # assigned target labels
+        batch_ind = torch.arange(end=self.bs, dtype=torch.int64, device=gt_labels.device)[..., None]
+        target_gt_idx = target_gt_idx + batch_ind * self.n_max_boxes
+        target_labels = gt_labels.long().flatten()[target_gt_idx]
+
+        # assigned target boxes
+        target_bboxes = gt_bboxes.reshape([-1, 4])[target_gt_idx]
+
+        # assigned target scores
+        target_labels[target_labels < 0] = 0
+        target_scores = nn.functional.one_hot(target_labels, self.num_classes)
+        fg_scores_mask = fg_mask[:, :, None].repeat(1, 1, self.num_classes)
+        target_scores = torch.where(fg_scores_mask > 0, target_scores, torch.full_like(target_scores, 0))
+
+        return target_labels, target_bboxes, target_scores
 
 
 # Copied from transformers.models.detr.modeling_detr._upcast
@@ -1678,39 +1947,370 @@ def box_iou(boxes1, boxes2):
     return iou, union
 
 
-# Copied from transformers.models.detr.modeling_detr.generalized_box_iou
-def generalized_box_iou(boxes1, boxes2):
-    """
-    Generalized IoU from https://giou.stanford.edu/. The boxes should be in [x0, y0, x1, y1] (corner) format.
+# Copied from https://github.com/meituan/YOLOv6/blob/87dd3d3963b6b373ccdc626b9bae5a2afec5639e/yolov6/assigners/iou2d_calculator.py#L22
+def iou2d_calculator(bboxes1, bboxes2, mode="iou", is_aligned=False, scale=1.0, dtype=None):
+    """2D Overlaps (e.g. IoUs, GIoUs) Calculator."""
+
+    """Calculate IoU between 2D bboxes.
+
+    Args:
+        bboxes1 (Tensor): bboxes have shape (m, 4) in <x1, y1, x2, y2>
+            format, or shape (m, 5) in <x1, y1, x2, y2, score> format.
+        bboxes2 (Tensor): bboxes have shape (m, 4) in <x1, y1, x2, y2>
+            format, shape (m, 5) in <x1, y1, x2, y2, score> format, or be
+            empty. If ``is_aligned `` is ``True``, then m and n must be
+            equal.
+        mode (str): "iou" (intersection over union), "iof" (intersection
+            over foreground), or "giou" (generalized intersection over
+            union).
+        is_aligned (bool, optional): If True, then m and n must be equal.
+            Default False.
 
     Returns:
-        `torch.FloatTensor`: a [N, M] pairwise matrix, where N = len(boxes1) and M = len(boxes2)
+        Tensor: shape (m, n) if ``is_aligned `` is False else shape (m,)
     """
-    # degenerate boxes gives inf / nan results
-    # so do an early check
-    if not (boxes1[:, 2:] >= boxes1[:, :2]).all():
-        raise ValueError(f"boxes1 must be in [x0, y0, x1, y1] (corner) format, but got {boxes1}")
-    if not (boxes2[:, 2:] >= boxes2[:, :2]).all():
-        raise ValueError(f"boxes2 must be in [x0, y0, x1, y1] (corner) format, but got {boxes2}")
-    iou, union = box_iou(boxes1, boxes2)
+    assert bboxes1.size(-1) in [0, 4, 5]
+    assert bboxes2.size(-1) in [0, 4, 5]
+    if bboxes2.size(-1) == 5:
+        bboxes2 = bboxes2[..., :4]
+    if bboxes1.size(-1) == 5:
+        bboxes1 = bboxes1[..., :4]
 
-    top_left = torch.min(boxes1[:, None, :2], boxes2[:, :2])
-    bottom_right = torch.max(boxes1[:, None, 2:], boxes2[:, 2:])
+    if dtype == "fp16":
+        # change tensor type to save cpu and cuda memory and keep speed
+        bboxes1 = cast_tensor_type(bboxes1, scale, dtype)
+        bboxes2 = cast_tensor_type(bboxes2, scale, dtype)
+        overlaps = bbox_overlaps(bboxes1, bboxes2, mode, is_aligned)
+        if not overlaps.is_cuda and overlaps.dtype == torch.float16:
+            # resume cpu float32
+            overlaps = overlaps.float()
+        return overlaps
 
-    width_height = (bottom_right - top_left).clamp(min=0)  # [N,M,2]
-    area = width_height[:, :, 0] * width_height[:, :, 1]
-
-    return iou - (area - union) / area
+    return bbox_overlaps(bboxes1, bboxes2, mode, is_aligned)
 
 
-# Copied from transformers.models.detr.modeling_detr._max_by_axis
-def _max_by_axis(the_list):
-    # type: (List[List[int]]) -> List[int]
-    maxes = the_list[0]
-    for sublist in the_list[1:]:
-        for index, item in enumerate(sublist):
-            maxes[index] = max(maxes[index], item)
-    return maxes
+# Copied from https://github.com/meituan/YOLOv6/blob/87dd3d3963b6b373ccdc626b9bae5a2afec5639e/yolov6/assigners/iou2d_calculator.py#L7C1-L11C13
+def cast_tensor_type(x, scale=1.0, dtype=None):
+    if dtype == "fp16":
+        # scale is for preventing overflows
+        x = (x / scale).half()
+    return x
+
+
+# Copied from https://github.com/meituan/YOLOv6/blob/87dd3d3963b6b373ccdc626b9bae5a2afec5639e/yolov6/assigners/iou2d_calculator.py#L14
+def fp16_clamp(x, min=None, max=None):
+    if not x.is_cuda and x.dtype == torch.float16:
+        # clamp for cpu float16, tensor fp16 has no clamp implementation
+        return x.float().clamp(min, max).half()
+
+    return x.clamp(min, max)
+
+
+def bbox_overlaps(bboxes1, bboxes2, mode="iou", is_aligned=False, eps=1e-6):
+    """Calculate overlap between two set of bboxes.
+
+    FP16 Contributed by https://github.com/open-mmlab/mmdetection/pull/4889
+    Note:
+        Assume bboxes1 is M x 4, bboxes2 is N x 4, when mode is 'iou',
+        there are some new generated variable when calculating IOU
+        using bbox_overlaps function:
+
+        1) is_aligned is False
+            area1: M x 1
+            area2: N x 1
+            lt: M x N x 2
+            rb: M x N x 2
+            wh: M x N x 2
+            overlap: M x N x 1
+            union: M x N x 1
+            ious: M x N x 1
+
+            Total memory:
+                S = (9 x N x M + N + M) * 4 Byte,
+
+            When using FP16, we can reduce:
+                R = (9 x N x M + N + M) * 4 / 2 Byte
+                R large than (N + M) * 4 * 2 is always true when N and M >= 1.
+                Obviously, N + M <= N * M < 3 * N * M, when N >=2 and M >=2,
+                           N + 1 < 3 * N, when N or M is 1.
+
+            Given M = 40 (ground truth), N = 400000 (three anchor boxes
+            in per grid, FPN, R-CNNs),
+                R = 275 MB (one times)
+
+            A special case (dense detection), M = 512 (ground truth),
+                R = 3516 MB = 3.43 GB
+
+            When the batch size is B, reduce:
+                B x R
+
+            Therefore, CUDA memory runs out frequently.
+
+            Experiments on GeForce RTX 2080Ti (11019 MiB):
+
+            |   dtype   |   M   |   N   |   Use    |   Real   |   Ideal   |
+            |:----:|:----:|:----:|:----:|:----:|:----:|
+            |   FP32   |   512 | 400000 | 8020 MiB |   --   |   --   |
+            |   FP16   |   512 | 400000 |   4504 MiB | 3516 MiB | 3516 MiB |
+            |   FP32   |   40 | 400000 |   1540 MiB |   --   |   --   |
+            |   FP16   |   40 | 400000 |   1264 MiB |   276MiB   | 275 MiB |
+
+        2) is_aligned is True
+            area1: N x 1
+            area2: N x 1
+            lt: N x 2
+            rb: N x 2
+            wh: N x 2
+            overlap: N x 1
+            union: N x 1
+            ious: N x 1
+
+            Total memory:
+                S = 11 x N * 4 Byte
+
+            When using FP16, we can reduce:
+                R = 11 x N * 4 / 2 Byte
+
+        So do the 'giou' (large than 'iou').
+
+        Time-wise, FP16 is generally faster than FP32.
+
+        When gpu_assign_thr is not -1, it takes more time on cpu
+        but not reduce memory.
+        There, we can reduce half the memory and keep the speed.
+
+    If ``is_aligned`` is ``False``, then calculate the overlaps between each
+    bbox of bboxes1 and bboxes2, otherwise the overlaps between each aligned
+    pair of bboxes1 and bboxes2.
+
+    Args:
+        bboxes1 (Tensor): shape (B, m, 4) in <x1, y1, x2, y2> format or empty.
+        bboxes2 (Tensor): shape (B, n, 4) in <x1, y1, x2, y2> format or empty.
+            B indicates the batch dim, in shape (B1, B2, ..., Bn).
+            If ``is_aligned`` is ``True``, then m and n must be equal.
+        mode (str): "iou" (intersection over union), "iof" (intersection over
+            foreground) or "giou" (generalized intersection over union).
+            Default "iou".
+        is_aligned (bool, optional): If True, then m and n must be equal.
+            Default False.
+        eps (float, optional): A value added to the denominator for numerical
+            stability. Default 1e-6.
+
+    Returns:
+        Tensor: shape (m, n) if ``is_aligned`` is False else shape (m,)
+
+    Example:
+        >>> bboxes1 = torch.FloatTensor([
+        >>>     [0, 0, 10, 10],
+        >>>     [10, 10, 20, 20],
+        >>>     [32, 32, 38, 42],
+        >>> ])
+        >>> bboxes2 = torch.FloatTensor([
+        >>>     [0, 0, 10, 20],
+        >>>     [0, 10, 10, 19],
+        >>>     [10, 10, 20, 20],
+        >>> ])
+        >>> overlaps = bbox_overlaps(bboxes1, bboxes2)
+        >>> assert overlaps.shape == (3, 3)
+        >>> overlaps = bbox_overlaps(bboxes1, bboxes2, is_aligned=True)
+        >>> assert overlaps.shape == (3, )
+
+    Example:
+        >>> empty = torch.empty(0, 4)
+        >>> nonempty = torch.FloatTensor([[0, 0, 10, 9]])
+        >>> assert tuple(bbox_overlaps(empty, nonempty).shape) == (0, 1)
+        >>> assert tuple(bbox_overlaps(nonempty, empty).shape) == (1, 0)
+        >>> assert tuple(bbox_overlaps(empty, empty).shape) == (0, 0)
+    """
+
+    assert mode in ["iou", "iof", "giou"], f"Unsupported mode {mode}"
+    # Either the boxes are empty or the length of boxes' last dimension is 4
+    assert bboxes1.size(-1) == 4 or bboxes1.size(0) == 0
+    assert bboxes2.size(-1) == 4 or bboxes2.size(0) == 0
+
+    # Batch dim must be the same
+    # Batch dim: (B1, B2, ... Bn)
+    assert bboxes1.shape[:-2] == bboxes2.shape[:-2]
+    batch_shape = bboxes1.shape[:-2]
+
+    rows = bboxes1.size(-2)
+    cols = bboxes2.size(-2)
+    if is_aligned:
+        assert rows == cols
+
+    if rows * cols == 0:
+        if is_aligned:
+            return bboxes1.new(batch_shape + (rows,))
+        else:
+            return bboxes1.new(batch_shape + (rows, cols))
+
+    area1 = (bboxes1[..., 2] - bboxes1[..., 0]) * (bboxes1[..., 3] - bboxes1[..., 1])
+    area2 = (bboxes2[..., 2] - bboxes2[..., 0]) * (bboxes2[..., 3] - bboxes2[..., 1])
+
+    if is_aligned:
+        lt = torch.max(bboxes1[..., :2], bboxes2[..., :2])  # [B, rows, 2]
+        rb = torch.min(bboxes1[..., 2:], bboxes2[..., 2:])  # [B, rows, 2]
+
+        wh = fp16_clamp(rb - lt, min=0)
+        overlap = wh[..., 0] * wh[..., 1]
+
+        if mode in ["iou", "giou"]:
+            union = area1 + area2 - overlap
+        else:
+            union = area1
+        if mode == "giou":
+            enclosed_lt = torch.min(bboxes1[..., :2], bboxes2[..., :2])
+            enclosed_rb = torch.max(bboxes1[..., 2:], bboxes2[..., 2:])
+    else:
+        lt = torch.max(bboxes1[..., :, None, :2], bboxes2[..., None, :, :2])  # [B, rows, cols, 2]
+        rb = torch.min(bboxes1[..., :, None, 2:], bboxes2[..., None, :, 2:])  # [B, rows, cols, 2]
+
+        wh = fp16_clamp(rb - lt, min=0)
+        overlap = wh[..., 0] * wh[..., 1]
+
+        if mode in ["iou", "giou"]:
+            union = area1[..., None] + area2[..., None, :] - overlap
+        else:
+            union = area1[..., None]
+        if mode == "giou":
+            enclosed_lt = torch.min(bboxes1[..., :, None, :2], bboxes2[..., None, :, :2])
+            enclosed_rb = torch.max(bboxes1[..., :, None, 2:], bboxes2[..., None, :, 2:])
+
+    eps = union.new_tensor([eps])
+    union = torch.max(union, eps)
+    ious = overlap / union
+    if mode in ["iou", "iof"]:
+        return ious
+    # calculate gious
+    enclose_wh = fp16_clamp(enclosed_rb - enclosed_lt, min=0)
+    enclose_area = enclose_wh[..., 0] * enclose_wh[..., 1]
+    enclose_area = torch.max(enclose_area, eps)
+    gious = ious - (enclose_area - union) / enclose_area
+    return gious
+
+
+def dist_calculator(gt_bboxes, anchor_bboxes):
+    """compute center distance between all bbox and gt
+
+    Args:
+        gt_bboxes (Tensor): shape(bs*n_max_boxes, 4)
+        anchor_bboxes (Tensor): shape(num_total_anchors, 4)
+    Return:
+        distances (Tensor): shape(bs*n_max_boxes, num_total_anchors)
+        ac_points (Tensor): shape(num_total_anchors, 2)
+    """
+    gt_cx = (gt_bboxes[:, 0] + gt_bboxes[:, 2]) / 2.0
+    gt_cy = (gt_bboxes[:, 1] + gt_bboxes[:, 3]) / 2.0
+    gt_points = torch.stack([gt_cx, gt_cy], dim=1)
+    ac_cx = (anchor_bboxes[:, 0] + anchor_bboxes[:, 2]) / 2.0
+    ac_cy = (anchor_bboxes[:, 1] + anchor_bboxes[:, 3]) / 2.0
+    ac_points = torch.stack([ac_cx, ac_cy], dim=1)
+
+    distances = (gt_points[:, None, :] - ac_points[None, :, :]).pow(2).sum(-1).sqrt()
+
+    return distances, ac_points
+
+
+def select_candidates_in_gts(xy_centers, gt_bboxes, eps=1e-9):
+    """select the positive anchors's center in gt
+
+    Args:
+        xy_centers (Tensor): shape(bs*n_max_boxes, num_total_anchors, 4)
+        gt_bboxes (Tensor): shape(bs, n_max_boxes, 4)
+    Return:
+        (Tensor): shape(bs, n_max_boxes, num_total_anchors)
+    """
+    n_anchors = xy_centers.size(0)
+    bs, n_max_boxes, _ = gt_bboxes.size()
+    _gt_bboxes = gt_bboxes.reshape([-1, 4])
+    xy_centers = xy_centers.unsqueeze(0).repeat(bs * n_max_boxes, 1, 1)
+    gt_bboxes_lt = _gt_bboxes[:, 0:2].unsqueeze(1).repeat(1, n_anchors, 1)
+    gt_bboxes_rb = _gt_bboxes[:, 2:4].unsqueeze(1).repeat(1, n_anchors, 1)
+    b_lt = xy_centers - gt_bboxes_lt
+    b_rb = gt_bboxes_rb - xy_centers
+    bbox_deltas = torch.cat([b_lt, b_rb], dim=-1)
+    bbox_deltas = bbox_deltas.reshape([bs, n_max_boxes, n_anchors, -1])
+    return (bbox_deltas.min(axis=-1)[0] > eps).to(gt_bboxes.dtype)
+
+
+def select_highest_overlaps(mask_pos, overlaps, n_max_boxes):
+    """if an anchor box is assigned to multiple gts,
+        the one with the highest iou will be selected.
+
+    Args:
+        mask_pos (Tensor): shape(bs, n_max_boxes, num_total_anchors)
+        overlaps (Tensor): shape(bs, n_max_boxes, num_total_anchors)
+    Return:
+        target_gt_idx (Tensor): shape(bs, num_total_anchors)
+        fg_mask (Tensor): shape(bs, num_total_anchors)
+        mask_pos (Tensor): shape(bs, n_max_boxes, num_total_anchors)
+    """
+    fg_mask = mask_pos.sum(axis=-2)
+    if fg_mask.max() > 1:
+        mask_multi_gts = (fg_mask.unsqueeze(1) > 1).repeat([1, n_max_boxes, 1])
+        max_overlaps_idx = overlaps.argmax(axis=1)
+        is_max_overlaps = nn.funtional.one_hot(max_overlaps_idx, n_max_boxes)
+        is_max_overlaps = is_max_overlaps.permute(0, 2, 1).to(overlaps.dtype)
+        mask_pos = torch.where(mask_multi_gts, is_max_overlaps, mask_pos)
+        fg_mask = mask_pos.sum(axis=-2)
+    target_gt_idx = mask_pos.argmax(axis=-2)
+    return target_gt_idx, fg_mask, mask_pos
+
+
+def iou_calculator(box1, box2, eps=1e-9):
+    """Calculate iou for batch
+
+    Args:
+        box1 (Tensor): shape(bs, n_max_boxes, 1, 4)
+        box2 (Tensor): shape(bs, 1, num_total_anchors, 4)
+    Return:
+        (Tensor): shape(bs, n_max_boxes, num_total_anchors)
+    """
+    box1 = box1.unsqueeze(2)  # [N, M1, 4] -> [N, M1, 1, 4]
+    box2 = box2.unsqueeze(1)  # [N, M2, 4] -> [N, 1, M2, 4]
+    print(box1.shape, box2.shape)
+    px1y1, px2y2 = box1[:, :, :, 0:2], box1[:, :, :, 2:4]
+    gx1y1, gx2y2 = box2[:, :, :, 0:2], box2[:, :, :, 2:4]
+    x1y1 = torch.maximum(px1y1, gx1y1)
+    x2y2 = torch.minimum(px2y2, gx2y2)
+    overlap = (x2y2 - x1y1).clip(0).prod(-1)
+    area1 = (px2y2 - px1y1).clip(0).prod(-1)
+    area2 = (gx2y2 - gx1y1).clip(0).prod(-1)
+    union = area1 + area2 - overlap + eps
+
+    return overlap / union
+
+
+def dist2bbox(distance, anchor_points, box_format="xyxy"):
+    """Transform distance(ltrb) to box(xywh or xyxy)."""
+    lt, rb = torch.split(distance, 2, -1)
+    x1y1 = anchor_points - lt
+    x2y2 = anchor_points + rb
+    if box_format == "xyxy":
+        bbox = torch.cat([x1y1, x2y2], -1)
+    elif box_format == "xywh":
+        c_xy = (x1y1 + x2y2) / 2
+        wh = x2y2 - x1y1
+        bbox = torch.cat([c_xy, wh], -1)
+    return bbox
+
+
+def bbox2dist(anchor_points, bbox, reg_max):
+    """Transform bbox(xyxy) to dist(ltrb)."""
+    x1y1, x2y2 = torch.split(bbox, 2, -1)
+    lt = anchor_points - x1y1
+    rb = x2y2 - anchor_points
+    dist = torch.cat([lt, rb], -1).clip(0, reg_max - 0.01)
+    return dist
+
+
+def xywh2xyxy(bboxes):
+    """Transform bbox(xywh) to box(xyxy)."""
+    bboxes[..., 0] = bboxes[..., 0] - bboxes[..., 2] * 0.5
+    bboxes[..., 1] = bboxes[..., 1] - bboxes[..., 3] * 0.5
+    bboxes[..., 2] = bboxes[..., 0] + bboxes[..., 2]
+    bboxes[..., 3] = bboxes[..., 1] + bboxes[..., 3]
+    return bboxes
 
 
 # Copied from transformers.models.detr.modeling_detr.NestedTensor
@@ -1733,6 +2333,16 @@ class NestedTensor(object):
 
     def __repr__(self):
         return str(self.tensors)
+
+
+# Copied from transformers.models.detr.modeling_detr._max_by_axis
+def _max_by_axis(the_list):
+    # type: (List[List[int]]) -> List[int]
+    maxes = the_list[0]
+    for sublist in the_list[1:]:
+        for index, item in enumerate(sublist):
+            maxes[index] = max(maxes[index], item)
+    return maxes
 
 
 # Copied from transformers.models.detr.modeling_detr.nested_tensor_from_tensor_list

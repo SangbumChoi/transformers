@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ YOLOV6 model configuration"""
-import math
 from collections import OrderedDict
 from typing import Mapping
 
@@ -109,6 +108,7 @@ class Yolov6Config(PretrainedConfig):
     def __init__(
         self,
         in_channels=3,
+        img_size=640,
         block_type="Yolov6RepVGGBlock",
         backbone_num_repeats=[1, 2, 4, 6, 2],
         backbone_out_channels=[16, 32, 64, 128, 256],
@@ -124,6 +124,7 @@ class Yolov6Config(PretrainedConfig):
         head_num_layers=3,
         head_anchors=3,
         head_strides=[8, 16, 32],
+        atss_warmup_epoch=0,
         iou_type="siou",
         use_dfl=False,
         reg_max=0,  # if use_dfl is False, please set reg_max to 0
@@ -145,6 +146,7 @@ class Yolov6Config(PretrainedConfig):
         # neck_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in neck_out_channels]
 
         self.in_channels = in_channels
+        self.img_size = img_size
         self.block_type = block_type
         self.backbone_num_repeats = backbone_num_repeats
         self.backbone_out_channels = backbone_out_channels
@@ -160,6 +162,7 @@ class Yolov6Config(PretrainedConfig):
         self.head_num_layers = head_num_layers
         self.head_anchors = head_anchors
         self.head_strides = head_strides
+        self.atss_warmup_epoch = atss_warmup_epoch
         self.iou_type = iou_type
         self.use_dfl = use_dfl
         self.reg_max = reg_max
