@@ -54,13 +54,13 @@ logger = logging.get_logger(__name__)
 _CONFIG_FOR_DOC = "Yolov6Config"
 
 # Base docstring
-_CHECKPOINT_FOR_DOC = "hustvl/yolos-small"
+_CHECKPOINT_FOR_DOC = "superbai/yolov6n"
 _EXPECTED_OUTPUT_SHAPE = [1, 3401, 384]
 
 
-YOLOS_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "hustvl/yolos-small",
-    # See all YOLOS models at https://huggingface.co/models?filter=yolos
+YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST = [
+    "superbai/yolov6n",
+    # See all YOLOS models at https://huggingface.co/models?filter=yolov6
 ]
 
 
@@ -111,6 +111,18 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
     last_hidden_state: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
+
+### tmp visualization remove after debugging
+import torch
+import matplotlib.pyplot as plt
+
+def plot_tensor_2d(tensor):
+    if tensor.dim() != 2:
+        raise ValueError("Input tensor must be 2D")
+
+    plt.imshow(tensor.detach().cpu().numpy(), cmap='viridis', interpolation='nearest')
+    plt.colorbar()
+    plt.show()
 
 
 def generate_anchors(
@@ -859,12 +871,6 @@ class Yolov6Neck(nn.Module):
 
 
 class Yolov6Head(nn.Module):
-    export = False
-    """Efficient Decoupled Head
-    With hardware-aware degisn, the decoupled head is optimized with
-    hybridchannels methods.
-    """
-
     def __init__(self, config: Yolov6Config):  # detection layer
         super().__init__()
 
@@ -968,7 +974,7 @@ class Yolov6Head(nn.Module):
                 reg_feat = self.reg_convs[i](reg_x)
                 reg_output = self.reg_preds[i](reg_feat)
 
-                cls_output = torch.sigmoid(cls_output)
+                # cls_output = torch.sigmoid(cls_output)
                 cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
                 reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
 
@@ -1238,9 +1244,8 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
             weight_dict = {
-                "loss_cls": self.config.class_loss_coefficient,
+                "loss_classes": self.config.class_loss_coefficient,
                 "loss_iou": self.config.iou_loss_coefficient,
-                "loss_dfl": self.config.dfl_loss_coefficient,
             }
             weight_dict["loss_dfl"] = self.config.dfl_loss_coefficient
 
@@ -1260,56 +1265,107 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
         )
 
 
-# Copied from transformers.models.detr.modeling_detr.dice_loss
-def dice_loss(inputs, targets, num_boxes):
-    """
-    Compute the DICE loss, similar to generalized IOU for masks
+def iou_loss(box1, box2, iou_type, box_format="xyxy", eps=1e-10):
+    """calculate iou. box1 and box2 are torch tensor with shape [M, 4] and [Nm 4]."""
+    if box1.shape[0] != box2.shape[0]:
+        box2 = box2.T
+        if box_format == "xyxy":
+            b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
+            b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
+        elif box_format == "xywh":
+            b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
+            b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
+            b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
+            b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
+    else:
+        if box_format == "xyxy":
+            b1_x1, b1_y1, b1_x2, b1_y2 = torch.split(box1, 1, dim=-1)
+            b2_x1, b2_y1, b2_x2, b2_y2 = torch.split(box2, 1, dim=-1)
 
-    Args:
-        inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets: A float tensor with the same shape as inputs. Stores the binary
-                 classification label for each element in inputs (0 for the negative class and 1 for the positive
-                 class).
-    """
-    inputs = inputs.sigmoid()
-    inputs = inputs.flatten(1)
-    numerator = 2 * (inputs * targets).sum(1)
-    denominator = inputs.sum(-1) + targets.sum(-1)
-    loss = 1 - (numerator + 1) / (denominator + 1)
-    return loss.sum() / num_boxes
+        elif box_format == "xywh":
+            b1_x1, b1_y1, b1_w, b1_h = torch.split(box1, 1, dim=-1)
+            b2_x1, b2_y1, b2_w, b2_h = torch.split(box2, 1, dim=-1)
+            b1_x1, b1_x2 = b1_x1 - b1_w / 2, b1_x1 + b1_w / 2
+            b1_y1, b1_y2 = b1_y1 - b1_h / 2, b1_y1 + b1_h / 2
+            b2_x1, b2_x2 = b2_x1 - b2_w / 2, b2_x1 + b2_w / 2
+            b2_y1, b2_y2 = b2_y1 - b2_h / 2, b2_y1 + b2_h / 2
+
+    # Intersection area
+    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * (
+        torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)
+    ).clamp(0)
+
+    # Union Area
+    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
+    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
+    union = w1 * h1 + w2 * h2 - inter + eps
+    iou = inter / union
+
+    cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex width
+    ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
+    if iou_type == "giou":
+        c_area = cw * ch + eps  # convex area
+        iou = iou - (c_area - union) / c_area
+    elif iou_type in ["diou", "ciou"]:
+        c2 = cw**2 + ch**2 + eps  # convex diagonal squared
+        rho2 = (
+            (b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2
+        ) / 4  # center distance squared
+        if iou_type == "diou":
+            iou = iou - rho2 / c2
+        elif iou_type == "ciou":
+            v = (4 / math.pi**2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
+            with torch.no_grad():
+                alpha = v / (v - iou + (1 + eps))
+            iou = iou - (rho2 / c2 + v * alpha)
+    elif iou_type == "siou":
+        # SIoU Loss https://arxiv.org/pdf/2205.12740.pdf
+        s_cw = (b2_x1 + b2_x2 - b1_x1 - b1_x2) * 0.5 + eps
+        s_ch = (b2_y1 + b2_y2 - b1_y1 - b1_y2) * 0.5 + eps
+        sigma = torch.pow(s_cw**2 + s_ch**2, 0.5)
+        sin_alpha_1 = torch.abs(s_cw) / sigma
+        sin_alpha_2 = torch.abs(s_ch) / sigma
+        threshold = pow(2, 0.5) / 2
+        sin_alpha = torch.where(sin_alpha_1 > threshold, sin_alpha_2, sin_alpha_1)
+        angle_cost = torch.cos(torch.arcsin(sin_alpha) * 2 - math.pi / 2)
+        rho_x = (s_cw / cw) ** 2
+        rho_y = (s_ch / ch) ** 2
+        gamma = angle_cost - 2
+        distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
+        omiga_w = torch.abs(w1 - w2) / torch.max(w1, w2)
+        omiga_h = torch.abs(h1 - h2) / torch.max(h1, h2)
+        shape_cost = torch.pow(1 - torch.exp(-1 * omiga_w), 4) + torch.pow(1 - torch.exp(-1 * omiga_h), 4)
+        iou = iou - 0.5 * (distance_cost + shape_cost)
+    loss = 1.0 - iou
+
+    return loss
 
 
-# Copied from transformers.models.detr.modeling_detr.sigmoid_focal_loss
-def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
-    """
-    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
+def df_loss(pred_dist, target):
+    # Calculate the left and right indices of the target values
+    target_left = target.to(torch.long)
+    target_right = target_left + 1
 
-    Args:
-        inputs (`torch.FloatTensor` of arbitrary shape):
-            The predictions for each example.
-        targets (`torch.FloatTensor` with the same shape as `inputs`)
-            A tensor storing the binary classification label for each element in the `inputs` (0 for the negative class
-            and 1 for the positive class).
-        alpha (`float`, *optional*, defaults to `0.25`):
-            Optional weighting factor in the range (0,1) to balance positive vs. negative examples.
-        gamma (`int`, *optional*, defaults to `2`):
-            Exponent of the modulating factor (1 - p_t) to balance easy vs hard examples.
+    # Calculate weights based on the distance from the target values
+    weight_left = target_right.to(torch.float) - target
+    weight_right = 1 - weight_left
 
-    Returns:
-        Loss tensor
-    """
-    prob = inputs.sigmoid()
-    ce_loss = nn.functional.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-    # add modulating factor
-    p_t = prob * targets + (1 - prob) * (1 - targets)
-    loss = ce_loss * ((1 - p_t) ** gamma)
+    # Calculate loss for the left and right targets
+    loss_left = (
+        nn.functional.cross_entropy(pred_dist.view(-1, self.reg_max + 1), target_left.view(-1), reduction="none").view(
+            target_left.shape
+        )
+        * weight_left
+    )
+    loss_right = (
+        nn.functional.cross_entropy(
+            pred_dist.view(-1, self.reg_max + 1), target_right.view(-1), reduction="none"
+        ).view(target_left.shape)
+        * weight_right
+    )
 
-    if alpha >= 0:
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-        loss = alpha_t * loss
-
-    return loss.mean(1).sum() / num_boxes
+    # Calculate the final loss by summing the left and right losses and maintaining the dimension
+    return (loss_left + loss_right).mean(-1, keepdim=True)
 
 
 # Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->Yolos
@@ -1368,8 +1424,11 @@ class Yolov6Loss(nn.Module):
         self.use_dfl = use_dfl
         self.reg_max = reg_max
 
-        self.iou_type = "giou"
+        self.iou_type = iou_type
         self.box_format = "xyxy"
+
+        self.gamma = 2.0
+        self.alpha = 0.75
 
     # removed logging parameter, which was part of the original implementation
     def loss_classes(self, outputs, targets, fg_mask, target_scores_sum):
@@ -1380,24 +1439,23 @@ class Yolov6Loss(nn.Module):
         if "logits" not in outputs and "target_scores" not in targets and "target_labels" not in targets:
             raise KeyError("No logits were found in the outputs")
 
-        gamma = 2.0
-        alpha = 0.75
-
         target_scores = targets["target_scores"]
         target_labels = targets["target_labels"]
+
+        # cls loss
+        target_labels = torch.where(fg_mask > 0, target_labels, torch.full_like(target_labels, self.num_classes))
         one_hot_label = nn.functional.one_hot(target_labels.long(), self.num_classes + 1)[..., :-1]
 
         pred_scores = outputs["pred_scores"]
 
-        weight = alpha * pred_scores.pow(gamma) * (1 - one_hot_label) + target_scores * one_hot_label
+        weight = self.alpha * pred_scores.pow(self.gamma) * (1 - one_hot_label) + target_scores * one_hot_label
         with torch.cuda.amp.autocast(enabled=False):
             loss_classes = (
                 nn.functional.binary_cross_entropy(pred_scores.float(), target_scores.float(), reduction="none")
                 * weight
             ).sum()
 
-        if target_scores_sum > 1:
-            loss_classes /= target_scores_sum
+        loss_classes /= target_scores_sum
 
         losses = {"loss_classes": loss_classes}
 
@@ -1414,6 +1472,7 @@ class Yolov6Loss(nn.Module):
             raise KeyError("No predicted boxes found in outputs")
         target_scores = targets["target_scores"]
         target_bboxes = targets["target_bboxes"]
+
         pred_bboxes = outputs["pred_bboxes"]
         pred_dist = outputs["pred_boxes"]
         anchor_points = outputs["anchor_points"]
@@ -1426,7 +1485,9 @@ class Yolov6Loss(nn.Module):
             pred_bboxes_pos = torch.masked_select(pred_bboxes, bbox_mask).reshape([-1, 4])
             target_bboxes_pos = torch.masked_select(target_bboxes, bbox_mask).reshape([-1, 4])
             bbox_weight = torch.masked_select(target_scores.sum(-1), fg_mask).unsqueeze(-1)
-            loss_iou = self.iou_loss(pred_bboxes_pos, target_bboxes_pos) * bbox_weight
+            loss_iou = (
+                iou_loss(pred_bboxes_pos, target_bboxes_pos, iou_type=self.iou_type, box_format="xyxy") * bbox_weight
+            )
 
             # dfl loss
             if self.use_dfl:
@@ -1434,7 +1495,7 @@ class Yolov6Loss(nn.Module):
                 pred_dist_pos = torch.masked_select(pred_dist, dist_mask).reshape([-1, 4, self.reg_max + 1])
                 target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
                 target_ltrb_pos = torch.masked_select(target_ltrb, bbox_mask).reshape([-1, 4])
-                loss_dfl = self._df_loss(pred_dist_pos, target_ltrb_pos) * bbox_weight
+                loss_dfl = df_loss(pred_dist_pos, target_ltrb_pos) * bbox_weight
             else:
                 loss_dfl = pred_dist.sum() * 0.0
 
@@ -1446,98 +1507,6 @@ class Yolov6Loss(nn.Module):
         losses["loss_iou"] = loss_iou.sum() / target_scores_sum
         losses["loss_dfl"] = loss_dfl.sum() / target_scores_sum
         return losses
-
-    def _iou_loss(self, box1, box2):
-        """ calculate iou. box1 and box2 are torch tensor with shape [M, 4] and [Nm 4].
-        """
-        if box1.shape[0] != box2.shape[0]:
-            box2 = box2.T
-            if self.box_format == 'xyxy':
-                b1_x1, b1_y1, b1_x2, b1_y2 = box1[0], box1[1], box1[2], box1[3]
-                b2_x1, b2_y1, b2_x2, b2_y2 = box2[0], box2[1], box2[2], box2[3]
-            elif self.box_format == 'xywh':
-                b1_x1, b1_x2 = box1[0] - box1[2] / 2, box1[0] + box1[2] / 2
-                b1_y1, b1_y2 = box1[1] - box1[3] / 2, box1[1] + box1[3] / 2
-                b2_x1, b2_x2 = box2[0] - box2[2] / 2, box2[0] + box2[2] / 2
-                b2_y1, b2_y2 = box2[1] - box2[3] / 2, box2[1] + box2[3] / 2
-        else:
-            if self.box_format == 'xyxy':
-                b1_x1, b1_y1, b1_x2, b1_y2 = torch.split(box1, 1, dim=-1)
-                b2_x1, b2_y1, b2_x2, b2_y2 = torch.split(box2, 1, dim=-1)
-
-            elif self.box_format == 'xywh':
-                b1_x1, b1_y1, b1_w, b1_h = torch.split(box1, 1, dim=-1)
-                b2_x1, b2_y1, b2_w, b2_h = torch.split(box2, 1, dim=-1)
-                b1_x1, b1_x2 = b1_x1 - b1_w / 2, b1_x1 + b1_w / 2
-                b1_y1, b1_y2 = b1_y1 - b1_h / 2, b1_y1 + b1_h / 2
-                b2_x1, b2_x2 = b2_x1 - b2_w / 2, b2_x1 + b2_w / 2
-                b2_y1, b2_y2 = b2_y1 - b2_h / 2, b2_y1 + b2_h / 2
-
-        # Intersection area
-        inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
-                (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
-
-        # Union Area
-        w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + self.eps
-        w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + self.eps
-        union = w1 * h1 + w2 * h2 - inter + self.eps
-        iou = inter / union
-
-        cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # convex width
-        ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # convex height
-        if self.iou_type == 'giou':
-            c_area = cw * ch + self.eps  # convex area
-            iou = iou - (c_area - union) / c_area
-        elif self.iou_type in ['diou', 'ciou']:
-            c2 = cw ** 2 + ch ** 2 + self.eps  # convex diagonal squared
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 +
-                    (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # center distance squared
-            if self.iou_type == 'diou':
-                iou = iou - rho2 / c2
-            elif self.iou_type == 'ciou':
-                v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
-                with torch.no_grad():
-                    alpha = v / (v - iou + (1 + self.eps))
-                iou = iou - (rho2 / c2 + v * alpha)
-        elif self.iou_type == 'siou':
-            # SIoU Loss https://arxiv.org/pdf/2205.12740.pdf
-            s_cw = (b2_x1 + b2_x2 - b1_x1 - b1_x2) * 0.5 + self.eps
-            s_ch = (b2_y1 + b2_y2 - b1_y1 - b1_y2) * 0.5 + self.eps
-            sigma = torch.pow(s_cw ** 2 + s_ch ** 2, 0.5)
-            sin_alpha_1 = torch.abs(s_cw) / sigma
-            sin_alpha_2 = torch.abs(s_ch) / sigma
-            threshold = pow(2, 0.5) / 2
-            sin_alpha = torch.where(sin_alpha_1 > threshold, sin_alpha_2, sin_alpha_1)
-            angle_cost = torch.cos(torch.arcsin(sin_alpha) * 2 - math.pi / 2)
-            rho_x = (s_cw / cw) ** 2
-            rho_y = (s_ch / ch) ** 2
-            gamma = angle_cost - 2
-            distance_cost = 2 - torch.exp(gamma * rho_x) - torch.exp(gamma * rho_y)
-            omiga_w = torch.abs(w1 - w2) / torch.max(w1, w2)
-            omiga_h = torch.abs(h1 - h2) / torch.max(h1, h2)
-            shape_cost = torch.pow(1 - torch.exp(-1 * omiga_w), 4) + torch.pow(1 - torch.exp(-1 * omiga_h), 4)
-            iou = iou - 0.5 * (distance_cost + shape_cost)
-        loss = 1.0 - iou
-
-        if self.reduction == 'sum':
-            loss = loss.sum()
-        elif self.reduction == 'mean':
-            loss = loss.mean()
-
-        return loss
-
-    def _df_loss(self, pred_dist, target):
-        target_left = target.to(torch.long)
-        target_right = target_left + 1
-        weight_left = target_right.to(torch.float) - target
-        weight_right = 1 - weight_left
-        loss_left = F.cross_entropy(
-            pred_dist.view(-1, self.reg_max + 1), target_left.view(-1), reduction='none').view(
-            target_left.shape) * weight_left
-        loss_right = F.cross_entropy(
-            pred_dist.view(-1, self.reg_max + 1), target_right.view(-1), reduction='none').view(
-            target_left.shape) * weight_right
-        return (loss_left + loss_right).mean(-1, keepdim=True)
 
     def bbox_decode(self, anchor_points, pred_dist):
         if self.use_dfl:
@@ -1568,7 +1537,6 @@ class Yolov6Loss(nn.Module):
                 losses applied, see each loss' doc.
         """
         feats, logits, pred_distri = outputs["feats"], outputs["logits"], outputs["pred_boxes"]
-        print('1571', pred_distri.device, pred_distri.shape)
         pred_scores = logits.sigmoid()
         outputs["pred_scores"] = pred_scores
 
@@ -1583,29 +1551,40 @@ class Yolov6Loss(nn.Module):
 
         assert pred_scores.type() == pred_distri.type()
         outputs["anchor_points"] = anchor_points
-        # gt_bboxes_scale = torch.tensor([batch_width, batch_height, batch_width, batch_height]).type_as(pred_scores)
-        # batch_size = pred_scores.shape[0]
 
         # targets
-        # targets =self.preprocess(targets, batch_size, gt_bboxes_scale)
-        # gt_labels = targets[:, :, :1]
-        # gt_bboxes = targets[:, :, 1:] #xyxy
-        # Also concat the target labels and boxes
         max_size = max(v["class_labels"].size(0) for v in targets)
-        gt_labels = torch.stack([torch.cat([v["class_labels"], -torch.ones(max_size - v["class_labels"].size(0), dtype=v["class_labels"].dtype).to(v["class_labels"].device)]) for v in targets])
-        gt_bboxes = torch.stack([torch.cat([v["boxes"], torch.zeros(max_size - v["boxes"].size(0), dtype=v["boxes"].dtype).to(v["boxes"].device)]) for v in targets])
+        gt_labels = torch.stack(
+            [
+                torch.cat(
+                    [
+                        v["class_labels"],
+                        -torch.ones(max_size - v["class_labels"].size(0), dtype=v["class_labels"].dtype).to(
+                            v["class_labels"].device
+                        ),
+                    ]
+                )
+                for v in targets
+            ]
+        )
+        gt_bboxes = torch.stack(
+            [
+                torch.cat(
+                    [
+                        v["boxes"],
+                        torch.zeros(max_size - v["boxes"].size(0), dtype=v["boxes"].dtype).to(v["boxes"].device),
+                    ]
+                )
+                for v in targets
+            ]
+        )
 
-        # gt_labels = torch.cat([v["class_labels"] for v in targets])
-        # gt_bboxes = torch.cat([v["boxes"] for v in targets])
-        print('line1605', gt_bboxes.shape)
         mask_gt = (gt_bboxes.sum(-1, keepdim=True) > 0).float()
 
         # pboxes
         anchor_points_s = anchor_points / stride_tensor
-        print('1605', anchor_points_s.device)
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
-        print(pred_bboxes.device, gt_bboxes.device)
 
         target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
             pred_scores.detach(), pred_bboxes.detach() * stride_tensor, anchor_points, gt_labels, gt_bboxes, mask_gt
@@ -1614,15 +1593,14 @@ class Yolov6Loss(nn.Module):
         # rescale bbox
         target_bboxes /= stride_tensor
 
-        # cls loss
-        target_labels = torch.where(fg_mask > 0, target_labels, torch.full_like(target_labels, self.num_classes))
-
         targets_ = {}
         targets_["target_scores"] = target_scores
         targets_["target_labels"] = target_labels
         targets_["target_bboxes"] = target_bboxes
 
         target_scores_sum = target_scores.sum()
+        if target_scores_sum < 1:
+            target_scores_sum = 1
 
         # Compute all the requested losses
         losses = {}
@@ -1795,7 +1773,6 @@ class TaskAlignedAssigner(nn.Module):
         """
         self.bs = pd_scores.size(0)
         self.n_max_boxes = gt_bboxes.size(1)
-        print('lin1797', gt_bboxes.shape)
 
         if self.n_max_boxes == 0:
             device = gt_bboxes.device
@@ -2249,7 +2226,7 @@ def select_highest_overlaps(mask_pos, overlaps, n_max_boxes):
     if fg_mask.max() > 1:
         mask_multi_gts = (fg_mask.unsqueeze(1) > 1).repeat([1, n_max_boxes, 1])
         max_overlaps_idx = overlaps.argmax(axis=1)
-        is_max_overlaps = nn.funtional.one_hot(max_overlaps_idx, n_max_boxes)
+        is_max_overlaps = nn.functional.one_hot(max_overlaps_idx, n_max_boxes)
         is_max_overlaps = is_max_overlaps.permute(0, 2, 1).to(overlaps.dtype)
         mask_pos = torch.where(mask_multi_gts, is_max_overlaps, mask_pos)
         fg_mask = mask_pos.sum(axis=-2)
@@ -2268,7 +2245,6 @@ def iou_calculator(box1, box2, eps=1e-9):
     """
     box1 = box1.unsqueeze(2)  # [N, M1, 4] -> [N, M1, 1, 4]
     box2 = box2.unsqueeze(1)  # [N, M2, 4] -> [N, 1, M2, 4]
-    print(box1.shape, box2.shape)
     px1y1, px2y2 = box1[:, :, :, 0:2], box1[:, :, :, 2:4]
     gx1y1, gx2y2 = box2[:, :, :, 0:2], box2[:, :, :, 2:4]
     x1y1 = torch.maximum(px1y1, gx1y1)
