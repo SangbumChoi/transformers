@@ -112,18 +112,6 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
-### tmp visualization remove after debugging
-import torch
-import matplotlib.pyplot as plt
-
-def plot_tensor_2d(tensor):
-    if tensor.dim() != 2:
-        raise ValueError("Input tensor must be 2D")
-
-    plt.imshow(tensor.detach().cpu().numpy(), cmap='viridis', interpolation='nearest')
-    plt.colorbar()
-    plt.show()
-
 
 def generate_anchors(
     feats,
@@ -1341,7 +1329,7 @@ def iou_loss(box1, box2, iou_type, box_format="xyxy", eps=1e-10):
     return loss
 
 
-def df_loss(pred_dist, target):
+def df_loss(pred_dist, target, reg_max):
     # Calculate the left and right indices of the target values
     target_left = target.to(torch.long)
     target_right = target_left + 1
@@ -1352,15 +1340,15 @@ def df_loss(pred_dist, target):
 
     # Calculate loss for the left and right targets
     loss_left = (
-        nn.functional.cross_entropy(pred_dist.view(-1, self.reg_max + 1), target_left.view(-1), reduction="none").view(
+        nn.functional.cross_entropy(pred_dist.view(-1, reg_max + 1), target_left.view(-1), reduction="none").view(
             target_left.shape
         )
         * weight_left
     )
     loss_right = (
-        nn.functional.cross_entropy(
-            pred_dist.view(-1, self.reg_max + 1), target_right.view(-1), reduction="none"
-        ).view(target_left.shape)
+        nn.functional.cross_entropy(pred_dist.view(-1, reg_max + 1), target_right.view(-1), reduction="none").view(
+            target_left.shape
+        )
         * weight_right
     )
 
@@ -1495,7 +1483,7 @@ class Yolov6Loss(nn.Module):
                 pred_dist_pos = torch.masked_select(pred_dist, dist_mask).reshape([-1, 4, self.reg_max + 1])
                 target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
                 target_ltrb_pos = torch.masked_select(target_ltrb, bbox_mask).reshape([-1, 4])
-                loss_dfl = df_loss(pred_dist_pos, target_ltrb_pos) * bbox_weight
+                loss_dfl = df_loss(pred_dist_pos, target_ltrb_pos, self.reg_max) * bbox_weight
             else:
                 loss_dfl = pred_dist.sum() * 0.0
 

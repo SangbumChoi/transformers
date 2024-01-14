@@ -15,6 +15,7 @@
 """Image processor class for YOLOS."""
 
 import pathlib
+import math
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -670,6 +671,19 @@ def compute_segments(
     return segmentation, segments
 
 
+def make_divisible(x, divisor):
+    # Returns x rounded up to the nearest multiple of divisor
+    return math.ceil(x / divisor) * divisor
+
+def check_img_size(imgsz, s=32, floor=256):
+    # Check and adjust image size to be a multiple of stride s in each dimension
+    if isinstance(imgsz, int):  # If it's an integer, e.g., img_size=640
+        new_size = max(make_divisible(imgsz, s), floor)
+    else:  # If it's a list, e.g., img_size=[640, 480]
+        new_size = [max(make_divisible(x, s), floor) for x in imgsz]
+    return new_size
+
+
 class Yolov6ImageProcessor(BaseImageProcessor):
     r"""
     Constructs a Detr image processor.
@@ -869,6 +883,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 "Size must contain 'height' and 'width' keys or 'shortest_edge' and 'longest_edge' keys. Got"
                 f" {size.keys()}."
             )
+        size = check_img_size(size)
         image = resize(
             image, size=size, resample=resample, data_format=data_format, input_data_format=input_data_format, **kwargs
         )
