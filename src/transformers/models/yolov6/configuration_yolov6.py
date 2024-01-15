@@ -134,6 +134,7 @@ class Yolov6Config(PretrainedConfig):
         dfl_loss_coefficient=1.0,
         initializer_range=0.02,
         forward_fuse=False,
+        export=False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -172,6 +173,7 @@ class Yolov6Config(PretrainedConfig):
         self.dfl_loss_coefficient = dfl_loss_coefficient
         self.initializer_range = initializer_range
         self.forward_fuse = forward_fuse
+        self.export = export
 
 
 class Yolov6OnnxConfig(OnnxConfig):

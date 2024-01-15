@@ -134,13 +134,13 @@ def generate_anchors(
             shift_x = torch.arange(end=w, device=device) + grid_cell_offset
             shift_y = torch.arange(end=h, device=device) + grid_cell_offset
             shift_y, shift_x = torch.meshgrid(shift_y, shift_x, indexing="ij")
-            anchor_point = torch.stack([shift_x, shift_y], axis=-1).to(torch.float)
+            anchor_point = torch.stack([shift_x, shift_y], axis=-1).to(feats[0].dtype)
             if mode == "af":  # anchor-free
                 anchor_points.append(anchor_point.reshape([-1, 2]))
-                stride_tensor.append(torch.full((h * w, 1), stride, dtype=torch.float, device=device))
+                stride_tensor.append(torch.full((h * w, 1), stride, dtype=feats[0].dtype, device=device))
             elif mode == "ab":  # anchor-based
                 anchor_points.append(anchor_point.reshape([-1, 2]).repeat(3, 1))
-                stride_tensor.append(torch.full((h * w, 1), stride, dtype=torch.float, device=device).repeat(3, 1))
+                stride_tensor.append(torch.full((h * w, 1), stride, dtype=feats[0].dtype, device=device).repeat(3, 1))
         anchor_points = torch.cat(anchor_points)
         stride_tensor = torch.cat(stride_tensor)
         return anchor_points, stride_tensor
@@ -950,55 +950,45 @@ class Yolov6Head(nn.Module):
 
     def forward(self, x):
         cls_score_list = []
-        reg_dist_list = []
+        # reg_dist_list = []
         reg_distri_list = []
-        if self.training:
-            for i in range(self.config.head_num_layers):
-                x[i] = self.stems[i](x[i])
-                cls_x = x[i]
-                reg_x = x[i]
-                cls_feat = self.cls_convs[i](cls_x)
-                cls_output = self.cls_preds[i](cls_feat)
-                reg_feat = self.reg_convs[i](reg_x)
-                reg_output = self.reg_preds[i](reg_feat)
 
+        for i in range(self.config.head_num_layers):
+            b, _, h, w = x[i].shape
+            l = h * w
+            x[i] = self.stems[i](x[i])
+            cls_x = x[i]
+            reg_x = x[i]
+            cls_feat = self.cls_convs[i](cls_x)
+            cls_output = self.cls_preds[i](cls_feat)
+            reg_feat = self.reg_convs[i](reg_x)
+            reg_output = self.reg_preds[i](reg_feat)
+
+            if self.training:
                 # cls_output = torch.sigmoid(cls_output)
                 cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
                 reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
-
-            cls_score_list = torch.cat(cls_score_list, axis=1)
-            reg_distri_list = torch.cat(reg_distri_list, axis=1)
-
-            return x, cls_score_list, reg_distri_list
-        else:
-            for i in range(self.config.head_num_layers):
-                b, _, h, w = x[i].shape
-                l = h * w
-                x[i] = self.stems[i](x[i])
-                cls_x = x[i]
-                reg_x = x[i]
-                cls_feat = self.cls_convs[i](cls_x)
-                cls_output = self.cls_preds[i](cls_feat)
-                reg_feat = self.reg_convs[i](reg_x)
-                reg_output = self.reg_preds[i](reg_feat)
-
+            else:
                 if self.config.use_dfl:
                     reg_output = reg_output.reshape([-1, 4, self.config.reg_max + 1, l]).permute(0, 2, 1, 3)
                     reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
 
-                if self.export:
+                if self.config.export:
                     cls_score_list.append(cls_output)
-                    reg_dist_list.append(reg_output)
+                    reg_distri_list.append(reg_output)
                 else:
                     cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
-                    reg_dist_list.append(reg_output.reshape([b, 4, l]))
+                    reg_distri_list.append(reg_output.reshape([b, 4, l]))
 
-            if self.export:
-                return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_dist_list))
+                if self.config.export:
+                    return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
 
+        if self.training:
+            cls_score_list = torch.cat(cls_score_list, axis=1)
+            pred_bboxes = torch.cat(reg_distri_list, axis=1)
+        else:
             cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
-            reg_dist_list = torch.cat(reg_dist_list, axis=-1).permute(0, 2, 1)
-
+            pred_bboxes = torch.cat(reg_distri_list, axis=-1).permute(0, 2, 1)
             anchor_points, stride_tensor = generate_anchors(
                 x,
                 self.stride,
@@ -1008,10 +998,10 @@ class Yolov6Head(nn.Module):
                 is_eval=True,
                 mode="af",
             )
-
-            pred_bboxes = dist2bbox(reg_dist_list, anchor_points, box_format="xywh")
+            pred_bboxes = dist2bbox(pred_bboxes, anchor_points, box_format="xywh")
             pred_bboxes *= stride_tensor
-            return None, cls_score_list, pred_bboxes
+
+        return x, cls_score_list, pred_bboxes
 
 
 class Yolov6PreTrainedModel(PreTrainedModel):
