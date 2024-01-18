@@ -25,7 +25,7 @@ from ...utils import logging
 
 logger = logging.get_logger(__name__)
 
-YOLOS_PRETRAINED_CONFIG_ARCHIVE_MAP = {
+YOLOV6_PRETRAINED_CONFIG_ARCHIVE_MAP = {
     "hustvl/yolos-small": "https://huggingface.co/hustvl/yolos-small/resolve/main/config.json",
     # See all YOLOS models at https://huggingface.co/models?filter=yolos
 }
@@ -33,9 +33,9 @@ YOLOS_PRETRAINED_CONFIG_ARCHIVE_MAP = {
 
 class Yolov6Config(PretrainedConfig):
     r"""
-    This is the configuration class to store the configuration of a [`YolosModel`]. It is used to instantiate a YOLOS
+    This is the configuration class to store the configuration of a [`YolosModel`]. It is used to instantiate a YOLOV6
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
-    defaults will yield a similar configuration to that of the YOLOS
+    defaults will yield a similar configuration to that of the YOLOV6
     [hustvl/yolos-base](https://huggingface.co/hustvl/yolos-base) architecture.
 
     Configuration objects inherit from [`PretrainedConfig`] and can be used to control the model outputs. Read the
@@ -108,7 +108,6 @@ class Yolov6Config(PretrainedConfig):
     def __init__(
         self,
         in_channels=3,
-        img_size=640,
         block_type="Yolov6RepVGGBlock",
         backbone_num_repeats=[1, 2, 4, 6, 2],
         backbone_out_channels=[16, 32, 64, 128, 256],
@@ -147,7 +146,6 @@ class Yolov6Config(PretrainedConfig):
         # neck_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in neck_out_channels]
 
         self.in_channels = in_channels
-        self.img_size = img_size
         self.block_type = block_type
         self.backbone_num_repeats = backbone_num_repeats
         self.backbone_out_channels = backbone_out_channels

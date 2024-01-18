@@ -1198,13 +1198,11 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
         )
 
         feats, logits, pred_boxes = self.head(outputs.hidden_states)
-
         loss, loss_dict = None, None
         if labels is not None:
             losses = ["classes", "boxes"]
             criterion = Yolov6Loss(
                 num_classes=self.config.num_labels,
-                ori_img_size=self.config.img_size,
                 warmup_epoch=self.config.atss_warmup_epoch,
                 use_dfl=self.config.use_dfl,
                 reg_max=self.config.reg_max,
@@ -1228,6 +1226,9 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             weight_dict["loss_dfl"] = self.config.dfl_loss_coefficient
 
             loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+
+        # hacky solution for evaluation : normalize pred_boxes into 0~1 scale
+        pred_boxes = pred_boxes / torch.tensor([pixel_values.shape[-1],pixel_values.shape[-2],pixel_values.shape[-1],pixel_values.shape[-2]]).to(pred_boxes.device)
 
         if not return_dict:
             output = (logits, pred_boxes) + outputs
@@ -1375,7 +1376,6 @@ class Yolov6Loss(nn.Module):
     def __init__(
         self,
         num_classes,
-        ori_img_size,
         warmup_epoch,
         use_dfl,
         reg_max,
@@ -1392,7 +1392,6 @@ class Yolov6Loss(nn.Module):
         self.grid_cell_size = grid_cell_size
         self.grid_cell_offset = grid_cell_offset
         self.num_classes = num_classes
-        self.ori_img_size = ori_img_size
         self.losses = losses
 
         self.warmup_epoch = warmup_epoch
@@ -1453,7 +1452,7 @@ class Yolov6Loss(nn.Module):
 
         pred_bboxes = outputs["pred_bboxes"]
         pred_dist = outputs["pred_boxes"]
-        anchor_points = outputs["anchor_points"]
+        anchor_points = outputs["anchor_points_s"]
 
         # select positive samples mask
         num_pos = fg_mask.sum()
@@ -1528,7 +1527,6 @@ class Yolov6Loss(nn.Module):
             self.cached_anchors = anchors, anchor_points, n_anchors_list, stride_tensor
 
         assert pred_scores.type() == pred_distri.type()
-        outputs["anchor_points"] = anchor_points
 
         # targets
         max_size = max(v["class_labels"].size(0) for v in targets)
@@ -1550,7 +1548,7 @@ class Yolov6Loss(nn.Module):
                 torch.cat(
                     [
                         v["boxes"],
-                        torch.zeros(max_size - v["boxes"].size(0), dtype=v["boxes"].dtype).to(v["boxes"].device),
+                        torch.zeros(max_size - v["boxes"].size(0), 4, dtype=v["boxes"].dtype).to(v["boxes"].device),
                     ]
                 )
                 for v in targets
@@ -1561,6 +1559,7 @@ class Yolov6Loss(nn.Module):
 
         # pboxes
         anchor_points_s = anchor_points / stride_tensor
+        outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
 
@@ -1823,7 +1822,8 @@ class TaskAlignedAssigner(nn.Module):
         gt_labels = gt_labels.to(torch.long)
         ind = torch.zeros([2, self.bs, self.n_max_boxes], dtype=torch.long)
         ind[0] = torch.arange(end=self.bs).view(-1, 1).repeat(1, self.n_max_boxes)
-        ind[1] = gt_labels.squeeze(-1)
+        # ind[1] = gt_labels.squeeze(-1)
+        ind[1] = gt_labels
         bbox_scores = pd_scores[ind[0], ind[1]]
 
         overlaps = iou_calculator(gt_bboxes, pd_bboxes)

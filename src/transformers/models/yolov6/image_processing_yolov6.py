@@ -71,7 +71,7 @@ if is_torch_available():
 
 if is_torchvision_available():
     from torchvision.ops.boxes import batched_nms
-
+    from torchvision.ops import nms
 
 if is_vision_available():
     import PIL
@@ -164,45 +164,6 @@ def get_resize_output_image_size(
         return size
 
     return get_size_with_aspect_ratio(image_size, size, max_size)
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_numpy_to_framework_fn
-def get_numpy_to_framework_fn(arr) -> Callable:
-    """
-    Returns a function that converts a numpy array to the framework of the input array.
-
-    Args:
-        arr (`np.ndarray`): The array to convert.
-    """
-    if isinstance(arr, np.ndarray):
-        return np.array
-    if is_tf_available() and is_tf_tensor(arr):
-        import tensorflow as tf
-
-        return tf.convert_to_tensor
-    if is_torch_available() and is_torch_tensor(arr):
-        import torch
-
-        return torch.tensor
-    if is_flax_available() and is_jax_tensor(arr):
-        import jax.numpy as jnp
-
-        return jnp.array
-    raise ValueError(f"Cannot convert arrays of type {type(arr)}")
-
-
-# Copied from transformers.models.detr.image_processing_detr.safe_squeeze
-def safe_squeeze(arr: np.ndarray, axis: Optional[int] = None) -> np.ndarray:
-    """
-    Squeezes an array, but only if the axis specified has dim 1.
-    """
-    if axis is None:
-        return arr.squeeze()
-
-    try:
-        return arr.squeeze(axis=axis)
-    except ValueError:
-        return arr
 
 
 # Copied from transformers.models.detr.image_processing_detr.normalize_annotation
@@ -343,128 +304,6 @@ def prepare_coco_detection_annotation(
     return new_target
 
 
-# Copied from transformers.models.detr.image_processing_detr.masks_to_boxes
-def masks_to_boxes(masks: np.ndarray) -> np.ndarray:
-    """
-    Compute the bounding boxes around the provided panoptic segmentation masks.
-
-    Args:
-        masks: masks in format `[number_masks, height, width]` where N is the number of masks
-
-    Returns:
-        boxes: bounding boxes in format `[number_masks, 4]` in xyxy format
-    """
-    if masks.size == 0:
-        return np.zeros((0, 4))
-
-    h, w = masks.shape[-2:]
-    y = np.arange(0, h, dtype=np.float32)
-    x = np.arange(0, w, dtype=np.float32)
-    # see https://github.com/pytorch/pytorch/issues/50276
-    y, x = np.meshgrid(y, x, indexing="ij")
-
-    x_mask = masks * np.expand_dims(x, axis=0)
-    x_max = x_mask.reshape(x_mask.shape[0], -1).max(-1)
-    x = np.ma.array(x_mask, mask=~(np.array(masks, dtype=bool)))
-    x_min = x.filled(fill_value=1e8)
-    x_min = x_min.reshape(x_min.shape[0], -1).min(-1)
-
-    y_mask = masks * np.expand_dims(y, axis=0)
-    y_max = y_mask.reshape(x_mask.shape[0], -1).max(-1)
-    y = np.ma.array(y_mask, mask=~(np.array(masks, dtype=bool)))
-    y_min = y.filled(fill_value=1e8)
-    y_min = y_min.reshape(y_min.shape[0], -1).min(-1)
-
-    return np.stack([x_min, y_min, x_max, y_max], 1)
-
-
-# Copied from transformers.models.detr.image_processing_detr.prepare_coco_panoptic_annotation with DETR->YOLOS
-def prepare_coco_panoptic_annotation(
-    image: np.ndarray,
-    target: Dict,
-    masks_path: Union[str, pathlib.Path],
-    return_masks: bool = True,
-    input_data_format: Union[ChannelDimension, str] = None,
-) -> Dict:
-    """
-    Prepare a coco panoptic annotation for YOLOS.
-    """
-    image_height, image_width = get_image_size(image, channel_dim=input_data_format)
-    annotation_path = pathlib.Path(masks_path) / target["file_name"]
-
-    new_target = {}
-    new_target["image_id"] = np.asarray([target["image_id"] if "image_id" in target else target["id"]], dtype=np.int64)
-    new_target["size"] = np.asarray([image_height, image_width], dtype=np.int64)
-    new_target["orig_size"] = np.asarray([image_height, image_width], dtype=np.int64)
-
-    if "segments_info" in target:
-        masks = np.asarray(PIL.Image.open(annotation_path), dtype=np.uint32)
-        masks = rgb_to_id(masks)
-
-        ids = np.array([segment_info["id"] for segment_info in target["segments_info"]])
-        masks = masks == ids[:, None, None]
-        masks = masks.astype(np.uint8)
-        if return_masks:
-            new_target["masks"] = masks
-        new_target["boxes"] = masks_to_boxes(masks)
-        new_target["class_labels"] = np.array(
-            [segment_info["category_id"] for segment_info in target["segments_info"]], dtype=np.int64
-        )
-        new_target["iscrowd"] = np.asarray(
-            [segment_info["iscrowd"] for segment_info in target["segments_info"]], dtype=np.int64
-        )
-        new_target["area"] = np.asarray(
-            [segment_info["area"] for segment_info in target["segments_info"]], dtype=np.float32
-        )
-
-    return new_target
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_segmentation_image
-def get_segmentation_image(
-    masks: np.ndarray, input_size: Tuple, target_size: Tuple, stuff_equiv_classes, deduplicate=False
-):
-    h, w = input_size
-    final_h, final_w = target_size
-
-    m_id = scipy.special.softmax(masks.transpose(0, 1), -1)
-
-    if m_id.shape[-1] == 0:
-        # We didn't detect any mask :(
-        m_id = np.zeros((h, w), dtype=np.int64)
-    else:
-        m_id = m_id.argmax(-1).reshape(h, w)
-
-    if deduplicate:
-        # Merge the masks corresponding to the same stuff class
-        for equiv in stuff_equiv_classes.values():
-            for eq_id in equiv:
-                m_id[m_id == eq_id] = equiv[0]
-
-    seg_img = id_to_rgb(m_id)
-    seg_img = resize(seg_img, (final_w, final_h), resample=PILImageResampling.NEAREST)
-    return seg_img
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_mask_area
-def get_mask_area(seg_img: np.ndarray, target_size: Tuple[int, int], n_classes: int) -> np.ndarray:
-    final_h, final_w = target_size
-    np_seg_img = seg_img.astype(np.uint8)
-    np_seg_img = np_seg_img.reshape(final_h, final_w, 3)
-    m_id = rgb_to_id(np_seg_img)
-    area = [(m_id == i).sum() for i in range(n_classes)]
-    return area
-
-
-# Copied from transformers.models.detr.image_processing_detr.score_labels_from_class_probabilities
-def score_labels_from_class_probabilities(logits: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    probs = scipy.special.softmax(logits, axis=-1)
-    labels = probs.argmax(-1, keepdims=True)
-    scores = np.take_along_axis(probs, labels, axis=-1)
-    scores, labels = scores.squeeze(-1), labels.squeeze(-1)
-    return scores, labels
-
-
 # Copied from transformers.models.detr.image_processing_detr.resize_annotation
 def resize_annotation(
     annotation: Dict[str, Any],
@@ -517,160 +356,6 @@ def resize_annotation(
     return new_annotation
 
 
-# Copied from transformers.models.detr.image_processing_detr.binary_mask_to_rle
-def binary_mask_to_rle(mask):
-    """
-    Converts given binary mask of shape `(height, width)` to the run-length encoding (RLE) format.
-
-    Args:
-        mask (`torch.Tensor` or `numpy.array`):
-            A binary mask tensor of shape `(height, width)` where 0 denotes background and 1 denotes the target
-            segment_id or class_id.
-    Returns:
-        `List`: Run-length encoded list of the binary mask. Refer to COCO API for more information about the RLE
-        format.
-    """
-    if is_torch_tensor(mask):
-        mask = mask.numpy()
-
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
-    runs[1::2] -= runs[::2]
-    return list(runs)
-
-
-# Copied from transformers.models.detr.image_processing_detr.convert_segmentation_to_rle
-def convert_segmentation_to_rle(segmentation):
-    """
-    Converts given segmentation map of shape `(height, width)` to the run-length encoding (RLE) format.
-
-    Args:
-        segmentation (`torch.Tensor` or `numpy.array`):
-            A segmentation map of shape `(height, width)` where each value denotes a segment or class id.
-    Returns:
-        `List[List]`: A list of lists, where each list is the run-length encoding of a segment / class id.
-    """
-    segment_ids = torch.unique(segmentation)
-
-    run_length_encodings = []
-    for idx in segment_ids:
-        mask = torch.where(segmentation == idx, 1, 0)
-        rle = binary_mask_to_rle(mask)
-        run_length_encodings.append(rle)
-
-    return run_length_encodings
-
-
-# Copied from transformers.models.detr.image_processing_detr.remove_low_and_no_objects
-def remove_low_and_no_objects(masks, scores, labels, object_mask_threshold, num_labels):
-    """
-    Binarize the given masks using `object_mask_threshold`, it returns the associated values of `masks`, `scores` and
-    `labels`.
-
-    Args:
-        masks (`torch.Tensor`):
-            A tensor of shape `(num_queries, height, width)`.
-        scores (`torch.Tensor`):
-            A tensor of shape `(num_queries)`.
-        labels (`torch.Tensor`):
-            A tensor of shape `(num_queries)`.
-        object_mask_threshold (`float`):
-            A number between 0 and 1 used to binarize the masks.
-    Raises:
-        `ValueError`: Raised when the first dimension doesn't match in all input tensors.
-    Returns:
-        `Tuple[`torch.Tensor`, `torch.Tensor`, `torch.Tensor`]`: The `masks`, `scores` and `labels` without the region
-        < `object_mask_threshold`.
-    """
-    if not (masks.shape[0] == scores.shape[0] == labels.shape[0]):
-        raise ValueError("mask, scores and labels must have the same shape!")
-
-    to_keep = labels.ne(num_labels) & (scores > object_mask_threshold)
-
-    return masks[to_keep], scores[to_keep], labels[to_keep]
-
-
-# Copied from transformers.models.detr.image_processing_detr.check_segment_validity
-def check_segment_validity(mask_labels, mask_probs, k, mask_threshold=0.5, overlap_mask_area_threshold=0.8):
-    # Get the mask associated with the k class
-    mask_k = mask_labels == k
-    mask_k_area = mask_k.sum()
-
-    # Compute the area of all the stuff in query k
-    original_area = (mask_probs[k] >= mask_threshold).sum()
-    mask_exists = mask_k_area > 0 and original_area > 0
-
-    # Eliminate disconnected tiny segments
-    if mask_exists:
-        area_ratio = mask_k_area / original_area
-        if not area_ratio.item() > overlap_mask_area_threshold:
-            mask_exists = False
-
-    return mask_exists, mask_k
-
-
-# Copied from transformers.models.detr.image_processing_detr.compute_segments
-def compute_segments(
-    mask_probs,
-    pred_scores,
-    pred_labels,
-    mask_threshold: float = 0.5,
-    overlap_mask_area_threshold: float = 0.8,
-    label_ids_to_fuse: Optional[Set[int]] = None,
-    target_size: Tuple[int, int] = None,
-):
-    height = mask_probs.shape[1] if target_size is None else target_size[0]
-    width = mask_probs.shape[2] if target_size is None else target_size[1]
-
-    segmentation = torch.zeros((height, width), dtype=torch.int32, device=mask_probs.device)
-    segments: List[Dict] = []
-
-    if target_size is not None:
-        mask_probs = nn.functional.interpolate(
-            mask_probs.unsqueeze(0), size=target_size, mode="bilinear", align_corners=False
-        )[0]
-
-    current_segment_id = 0
-
-    # Weigh each mask by its prediction score
-    mask_probs *= pred_scores.view(-1, 1, 1)
-    mask_labels = mask_probs.argmax(0)  # [height, width]
-
-    # Keep track of instances of each class
-    stuff_memory_list: Dict[str, int] = {}
-    for k in range(pred_labels.shape[0]):
-        pred_class = pred_labels[k].item()
-        should_fuse = pred_class in label_ids_to_fuse
-
-        # Check if mask exists and large enough to be a segment
-        mask_exists, mask_k = check_segment_validity(
-            mask_labels, mask_probs, k, mask_threshold, overlap_mask_area_threshold
-        )
-
-        if mask_exists:
-            if pred_class in stuff_memory_list:
-                current_segment_id = stuff_memory_list[pred_class]
-            else:
-                current_segment_id += 1
-
-            # Add current object segment to final segmentation map
-            segmentation[mask_k] = current_segment_id
-            segment_score = round(pred_scores[k].item(), 6)
-            segments.append(
-                {
-                    "id": current_segment_id,
-                    "label_id": pred_class,
-                    "was_fused": should_fuse,
-                    "score": segment_score,
-                }
-            )
-            if should_fuse:
-                stuff_memory_list[pred_class] = current_segment_id
-
-    return segmentation, segments
-
-
 def make_divisible(x, divisor):
     # Returns x rounded up to the nearest multiple of divisor
     return math.ceil(x / divisor) * divisor
@@ -694,7 +379,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         do_resize (`bool`, *optional*, defaults to `True`):
             Controls whether to resize the image's (height, width) dimensions to the specified `size`. Can be
             overridden by the `do_resize` parameter in the `preprocess` method.
-        size (`Dict[str, int]` *optional*, defaults to `{"shortest_edge": 800, "longest_edge": 1333}`):
+        size (`Dict[str, int]` *optional*, defaults to `{"shortest_edge": 640, "longest_edge": 640}`):
             Size of the image's (height, width) dimensions after resizing. Can be overridden by the `size` parameter in
             the `preprocess` method.
         resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BILINEAR`):
@@ -745,9 +430,9 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             )
             max_size = kwargs.pop("max_size")
         else:
-            max_size = None if size is None else 1333
+            max_size = None if size is None else 640
 
-        size = size if size is not None else {"shortest_edge": 800, "longest_edge": 1333}
+        size = size if size is not None else {"shortest_edge": 640, "longest_edge": 640}
         size = get_size_dict(size, max_size=max_size, default_to_square=False)
 
         super().__init__(**kwargs)
@@ -820,20 +505,10 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         target = self.prepare_annotation(image, target, return_segmentation_masks, masks_path, self.format)
         return image, target
 
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.convert_coco_poly_to_mask
-    def convert_coco_poly_to_mask(self, *args, **kwargs):
-        logger.warning_once("The `convert_coco_poly_to_mask` method is deprecated and will be removed in v4.33. ")
-        return convert_coco_poly_to_mask(*args, **kwargs)
-
     # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.prepare_coco_detection with DETR->Yolos
     def prepare_coco_detection(self, *args, **kwargs):
         logger.warning_once("The `prepare_coco_detection` method is deprecated and will be removed in v4.33. ")
         return prepare_coco_detection_annotation(*args, **kwargs)
-
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.prepare_coco_panoptic
-    def prepare_coco_panoptic(self, *args, **kwargs):
-        logger.warning_once("The `prepare_coco_panoptic` method is deprecated and will be removed in v4.33. ")
-        return prepare_coco_panoptic_annotation(*args, **kwargs)
 
     # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.resize
     def resize(
@@ -884,6 +559,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 f" {size.keys()}."
             )
         size = check_img_size(size)
+
         image = resize(
             image, size=size, resample=resample, data_format=data_format, input_data_format=input_data_format, **kwargs
         )
@@ -1201,7 +877,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 for image, target in zip(images, annotations):
                     orig_size = get_image_size(image, input_data_format)
                     resized_image = self.resize(
-                        image, size=size, max_size=max_size, resample=resample, input_data_format=input_data_format
+                        image, size=size, resample=resample, input_data_format=input_data_format
                     )
                     resized_annotation = self.resize_annotation(
                         target, orig_size, get_image_size(resized_image, input_data_format)
@@ -1250,9 +926,9 @@ class Yolov6ImageProcessor(BaseImageProcessor):
     def post_process_object_detection(
         self,
         outputs,
-        threshold: float = 0.5,
+        threshold: float = 0.03,
         target_sizes: Union[TensorType, List[Tuple]] = None,
-        nms_threshold: float = 0.45,
+        nms_threshold: float = 0.65,
     ):
         """
         Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
@@ -1274,7 +950,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         out_logits, out_bbox = outputs.logits, outputs.pred_boxes
         batch_size, num_queries, num_labels = out_logits.shape
 
-        prob = out_logits.sigmoid()
+        prob = out_logits.sigmoid().contiguous()
 
         all_scores = prob.view(batch_size, num_queries * num_labels).to(out_logits.device)
         all_indexes = torch.arange(num_queries * num_labels)[None].repeat(batch_size, 1).to(out_logits.device)
@@ -1283,6 +959,19 @@ class Yolov6ImageProcessor(BaseImageProcessor):
 
         boxes = center_to_corners_format(out_bbox)
         boxes = torch.gather(boxes, 1, all_boxes.unsqueeze(-1).repeat(1, 1, 4))
+        # rescale the boxes with the normalized coordinate
+        # boxes = boxes / torch.tensor([self.resize_img[1], self.resize_img[0], self.resize_img[1], self.resize_img[0]]).to(boxes.device)
+
+        # and from relative [0, config.img_size] to absolute [0, height] coordinates
+        if target_sizes is not None:
+            if isinstance(target_sizes, List):
+                img_h = torch.Tensor([i[0] for i in target_sizes])
+                img_w = torch.Tensor([i[1] for i in target_sizes])
+            else:
+                img_h, img_w = target_sizes.unbind(1)
+
+            scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1).to(boxes.device)
+            boxes = boxes * scale_fct[:, None, :]
 
         results = []
         for b in range(batch_size):
@@ -1291,7 +980,8 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             lbls = all_labels[b]
 
             # apply NMS
-            keep_inds = batched_nms(box, score, lbls, nms_threshold)[:100]
+            # keep_inds = batched_nms(box, score, lbls, nms_threshold)[:300]
+            keep_inds = nms(box, score, nms_threshold)[:300]
             score = score[keep_inds]
             lbls = lbls[keep_inds]
             box = box[keep_inds]
