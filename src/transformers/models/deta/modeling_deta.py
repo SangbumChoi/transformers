@@ -39,13 +39,17 @@ from ...modeling_attn_mask_utils import _prepare_4d_attention_mask
 from ...modeling_outputs import BaseModelOutput
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import meshgrid
-from ...utils import is_torchvision_available, logging, requires_backends
+from ...utils import is_accelerate_available, is_torchvision_available, logging, requires_backends
 from ..auto import AutoBackbone
 from .configuration_deta import DetaConfig
 
 
 logger = logging.get_logger(__name__)
 
+
+if is_accelerate_available():
+    from accelerate import PartialState
+    from accelerate.utils import reduce
 
 if is_vision_available():
     from transformers.image_transforms import center_to_corners_format
@@ -1265,9 +1269,13 @@ class DetaDecoder(DetaPreTrainedModel):
                 layer_outputs = self._gradient_checkpointing_func(
                     decoder_layer.__call__,
                     hidden_states,
+                    position_embeddings,
+                    reference_points_input,
+                    spatial_shapes,
+                    level_start_index,
                     encoder_hidden_states,
                     encoder_attention_mask,
-                    None,
+                    output_attentions,
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -1768,7 +1776,8 @@ class DetaForObjectDetection(DetaPreTrainedModel):
     _tied_weights_keys = [r"bbox_embed\.\d+"]
     # We can't initialize the model on meta device as some weights are modified during the initialization
     _no_split_modules = None
-
+    supports_gradient_checkpointing = True
+    
     # Copied from transformers.models.deformable_detr.modeling_deformable_detr.DeformableDetrForObjectDetection.__init__ with DeformableDetr->Deta
     def __init__(self, config: DetaConfig):
         super().__init__(config)
@@ -2219,13 +2228,11 @@ class DetaLoss(nn.Module):
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["class_labels"]) for t in targets)
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-        # (Niels): comment out function below, distributed training to be added
-        if dist.is_available() and dist.is_initialized():
-            torch.distributed.all_reduce(num_boxes)
-            world_size = dist.get_world_size()
-        else:
-            world_size = 1
-        # (Niels) in original implementation, num_boxes is divided by get_world_size()
+        # Check that we have initialized the distributed state
+        world_size = 1
+        if PartialState._shared_state != {}:
+            num_boxes = reduce(num_boxes)
+            world_size = PartialState().num_processes
         num_boxes = torch.clamp(num_boxes / world_size, min=1).item()
 
         # Compute all the requested losses
