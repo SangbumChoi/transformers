@@ -14,9 +14,9 @@
 # limitations under the License.
 """Image processor class for YOLOS."""
 
-import pathlib
 import math
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
+import pathlib
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -26,11 +26,9 @@ from ...image_transforms import (
     PaddingMode,
     center_to_corners_format,
     corners_to_center_format,
-    id_to_rgb,
     pad,
     rescale,
     resize,
-    rgb_to_id,
     to_channel_dimension_format,
 )
 from ...image_utils import (
@@ -51,13 +49,8 @@ from ...image_utils import (
 )
 from ...utils import (
     TensorType,
-    is_flax_available,
-    is_jax_tensor,
     is_scipy_available,
-    is_tf_available,
-    is_tf_tensor,
     is_torch_available,
-    is_torch_tensor,
     is_torchvision_available,
     is_vision_available,
     logging,
@@ -66,20 +59,17 @@ from ...utils import (
 
 if is_torch_available():
     import torch
-    from torch import nn
 
 
 if is_torchvision_available():
-    from torchvision.ops.boxes import batched_nms
     from torchvision.ops import nms
 
 if is_vision_available():
-    import PIL
+    pass
 
 
 if is_scipy_available():
-    import scipy.special
-    import scipy.stats
+    pass
 
 logger = logging.get_logger(__name__)
 
@@ -360,6 +350,7 @@ def make_divisible(x, divisor):
     # Returns x rounded up to the nearest multiple of divisor
     return math.ceil(x / divisor) * divisor
 
+
 def check_img_size(imgsz, s=32, floor=256):
     # Check and adjust image size to be a multiple of stride s in each dimension
     if isinstance(imgsz, int):  # If it's an integer, e.g., img_size=640
@@ -481,15 +472,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             return_segmentation_masks = False if return_segmentation_masks is None else return_segmentation_masks
             target = prepare_coco_detection_annotation(
                 image, target, return_segmentation_masks, input_data_format=input_data_format
-            )
-        elif format == AnnotationFormat.COCO_PANOPTIC:
-            return_segmentation_masks = True if return_segmentation_masks is None else return_segmentation_masks
-            target = prepare_coco_panoptic_annotation(
-                image,
-                target,
-                masks_path=masks_path,
-                return_masks=return_segmentation_masks,
-                input_data_format=input_data_format,
             )
         else:
             raise ValueError(f"Format {format} is not supported.")
@@ -827,16 +809,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         format = AnnotationFormat(format)
         if annotations is not None:
             validate_annotations(format, SUPPORTED_ANNOTATION_FORMATS, annotations)
-
-        if (
-            masks_path is not None
-            and format == AnnotationFormat.COCO_PANOPTIC
-            and not isinstance(masks_path, (pathlib.Path, str))
-        ):
-            raise ValueError(
-                "The path to the directory containing the mask PNG files should be provided as a"
-                f" `pathlib.Path` or string object, but is {type(masks_path)} instead."
-            )
 
         # All transformations expect numpy arrays
         images = [to_numpy_array(image) for image in images]

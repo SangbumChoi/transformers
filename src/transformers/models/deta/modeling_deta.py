@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
 from torch import Tensor, nn
 
@@ -1721,7 +1720,9 @@ class DetaModel(DetaPreTrainedModel):
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_logits)))
             query_embed, target = torch.split(pos_trans_out, num_channels, dim=2)
 
-            topk_feats = torch.stack([object_query_embedding[b][topk_proposals[b]] for b in range(batch_size)]).detach()
+            topk_feats = torch.stack(
+                [object_query_embedding[b][topk_proposals[b]] for b in range(batch_size)]
+            ).detach()
             target = target + self.pix_trans_norm(self.pix_trans(topk_feats))
         else:
             query_embed, target = torch.split(query_embeds, num_channels, dim=1)
@@ -1780,7 +1781,7 @@ class DetaForObjectDetection(DetaPreTrainedModel):
     # We can't initialize the model on meta device as some weights are modified during the initialization
     _no_split_modules = None
     supports_gradient_checkpointing = True
-    
+
     # Copied from transformers.models.deformable_detr.modeling_deformable_detr.DeformableDetrForObjectDetection.__init__ with DeformableDetr->Deta
     def __init__(self, config: DetaConfig):
         super().__init__(config)

@@ -1228,7 +1228,9 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 
         # hacky solution for evaluation : normalize pred_boxes into 0~1 scale
-        pred_boxes = pred_boxes / torch.tensor([pixel_values.shape[-1],pixel_values.shape[-2],pixel_values.shape[-1],pixel_values.shape[-2]]).to(pred_boxes.device)
+        pred_boxes = pred_boxes / torch.tensor(
+            [pixel_values.shape[-1], pixel_values.shape[-2], pixel_values.shape[-1], pixel_values.shape[-2]]
+        ).to(pred_boxes.device)
 
         if not return_dict:
             output = (logits, pred_boxes) + outputs
