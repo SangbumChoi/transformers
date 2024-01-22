@@ -18,6 +18,7 @@
 import math
 import warnings
 from dataclasses import dataclass
+from functools import partial
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -185,12 +186,12 @@ class Yolov6ConvLayer(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: int,
-        stride: int,
-        activation_type: str,
+        kernel_size=3,
+        stride=1,
         padding=None,
         groups=1,
         bias=False,
+        activation_type=None,
     ):
         super().__init__()
         if padding is None:
@@ -239,6 +240,7 @@ class Yolov6RepVGGBlock(nn.Module):
         padding_mode="zeros",
         deploy=False,
         use_se=False,
+        **kwargs,
     ):
         super(Yolov6RepVGGBlock, self).__init__()
         """ Initialization of the class.
@@ -399,10 +401,10 @@ class Yolov6RepVGGBlock(nn.Module):
 
 
 class Yolov6BottleRep(nn.Module):
-    def __init__(self, in_channels, out_channels, basic_block=Yolov6RepVGGBlock, weight=False):
+    def __init__(self, in_channels, out_channels, basic_block=Yolov6RepVGGBlock, activation_type=None, weight=False):
         super().__init__()
-        self.conv1 = basic_block(in_channels, out_channels)
-        self.conv2 = basic_block(out_channels, out_channels)
+        self.conv1 = basic_block(in_channels, out_channels, activation_type=activation_type)
+        self.conv2 = basic_block(out_channels, out_channels, activation_type=activation_type)
         if in_channels != out_channels:
             self.shortcut = False
         else:
@@ -430,22 +432,25 @@ class Yolov6RepBlock(nn.Module):
         n=1,
         block=Yolov6RepVGGBlock,
         basic_block=Yolov6RepVGGBlock,
-        **kwargs,
+        activation_type=None,
     ):
         super().__init__()
 
         self.conv1 = block(in_channels, out_channels)
         self.block = nn.Sequential(*(block(out_channels, out_channels) for _ in range(n - 1))) if n > 1 else None
         if block == Yolov6BottleRep:
-            self.conv1 = Yolov6BottleRep(in_channels, out_channels, basic_block=basic_block, weight=True)
+            self.conv1 = block(
+                in_channels, out_channels, basic_block=basic_block, activation_type=activation_type, weight=True
+            )
             n = n // 2
             self.block = (
                 nn.Sequential(
                     *(
-                        Yolov6BottleRep(
+                        block(
                             out_channels,
                             out_channels,
                             basic_block=basic_block,
+                            activation_type=activation_type,
                             weight=True,
                         )
                         for _ in range(n - 1)
@@ -480,7 +485,14 @@ class Yolov6BepC3(nn.Module):
         self.cv2 = Yolov6ConvLayer(in_channels, c_, 1, 1, activation_type=activation_type)
         self.cv3 = Yolov6ConvLayer(2 * c_, out_channels, 1, 1, activation_type=activation_type)
 
-        self.m = Yolov6RepBlock(in_channels=c_, out_channels=c_, n=n, block=Yolov6BottleRep, basic_block=block)
+        self.m = Yolov6RepBlock(
+            in_channels=c_,
+            out_channels=c_,
+            n=n,
+            block=Yolov6BottleRep,
+            basic_block=block,
+            activation_type=activation_type,
+        )
 
     def forward(self, x):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
@@ -605,7 +617,7 @@ class RepBiFPANNeck(nn.Module):
             out_channels=channels_list[5],  # 256
             kernel_size=1,
             stride=1,
-            activation_type=activation_type,
+            activation_type="relu",
         )
 
         self.Bifusion0 = BiFusion(
@@ -626,7 +638,7 @@ class RepBiFPANNeck(nn.Module):
             out_channels=channels_list[6],  # 128
             kernel_size=1,
             stride=1,
-            activation_type=activation_type,
+            activation_type="relu",
         )
 
         self.Bifusion1 = BiFusion(
@@ -647,7 +659,7 @@ class RepBiFPANNeck(nn.Module):
             out_channels=channels_list[7],  # 128
             kernel_size=3,
             stride=2,
-            activation_type=activation_type,
+            activation_type="relu",
         )
 
         self.Rep_n3 = stage_block(
@@ -663,7 +675,7 @@ class RepBiFPANNeck(nn.Module):
             out_channels=channels_list[9],  # 256
             kernel_size=3,
             stride=2,
-            activation_type=activation_type,
+            activation_type="relu",
         )
 
         self.Rep_n4 = stage_block(
@@ -698,6 +710,178 @@ class RepBiFPANNeck(nn.Module):
         return outputs
 
 
+class RepBiFPANNeck_P6(nn.Module):
+    """
+    CSPRepBiFPANNeck_P6 + RepBiFPANNeck_P6 module.
+    """
+
+    # [64, 128, 256, 512, 768, 1024]
+    # [512, 256, 128, 256, 512, 1024]
+    def __init__(
+        self,
+        channels_list=None,
+        num_repeats=None,
+        block=Yolov6BottleRep,
+        csp_e=float(1) / 2,
+        stage_block_type="Yolov6BepC3",
+        activation_type="relu",
+    ):
+        super().__init__()
+
+        assert channels_list is not None
+        assert num_repeats is not None
+
+        if stage_block_type == "Yolov6BepC3":
+            stage_block = partial(Yolov6BepC3, activation_type=activation_type)
+        else:
+            raise NotImplementedError
+
+        assert channels_list is not None
+        assert num_repeats is not None
+
+        self.reduce_layer0 = Yolov6ConvLayer(
+            in_channels=channels_list[5],  # 1024
+            out_channels=channels_list[6],  # 512
+            kernel_size=1,
+            stride=1,
+            activation_type="relu",
+        )
+
+        self.Bifusion0 = BiFusion(
+            in_channels=[channels_list[4], channels_list[6]],  # 768, 512
+            out_channels=channels_list[6],  # 512
+        )
+
+        self.Rep_p5 = stage_block(
+            in_channels=channels_list[6],  # 512
+            out_channels=channels_list[6],  # 512
+            n=num_repeats[6],
+            e=csp_e,
+            block=block,
+        )
+
+        self.reduce_layer1 = Yolov6ConvLayer(
+            in_channels=channels_list[6],  # 512
+            out_channels=channels_list[7],  # 256
+            kernel_size=1,
+            stride=1,
+            activation_type="relu",
+        )
+
+        self.Bifusion1 = BiFusion(
+            in_channels=[channels_list[3], channels_list[7]],  # 512, 256
+            out_channels=channels_list[7],  # 256
+        )
+
+        self.Rep_p4 = stage_block(
+            in_channels=channels_list[7],  # 256
+            out_channels=channels_list[7],  # 256
+            n=num_repeats[7],
+            e=csp_e,
+            block=block,
+        )
+
+        self.reduce_layer2 = Yolov6ConvLayer(
+            in_channels=channels_list[7],  # 256
+            out_channels=channels_list[8],  # 128
+            kernel_size=1,
+            stride=1,
+            activation_type="relu",
+        )
+
+        self.Bifusion2 = BiFusion(
+            in_channels=[channels_list[2], channels_list[8]],  # 256, 128
+            out_channels=channels_list[8],  # 128
+        )
+
+        self.Rep_p3 = stage_block(
+            in_channels=channels_list[8],  # 128
+            out_channels=channels_list[8],  # 128
+            n=num_repeats[8],
+            e=csp_e,
+            block=block,
+        )
+
+        self.downsample2 = Yolov6ConvLayer(
+            in_channels=channels_list[8],  # 128
+            out_channels=channels_list[8],  # 128
+            kernel_size=3,
+            stride=2,
+            activation_type="relu",
+        )
+
+        self.Rep_n4 = stage_block(
+            in_channels=channels_list[8] + channels_list[8],  # 128 + 128
+            out_channels=channels_list[9],  # 256
+            n=num_repeats[9],
+            e=csp_e,
+            block=block,
+        )
+
+        self.downsample1 = Yolov6ConvLayer(
+            in_channels=channels_list[9],  # 256
+            out_channels=channels_list[9],  # 256
+            kernel_size=3,
+            stride=2,
+            activation_type="relu",
+        )
+
+        self.Rep_n5 = stage_block(
+            in_channels=channels_list[7] + channels_list[9],  # 256 + 256
+            out_channels=channels_list[10],  # 512
+            n=num_repeats[10],
+            e=csp_e,
+            block=block,
+        )
+
+        self.downsample0 = Yolov6ConvLayer(
+            in_channels=channels_list[10],  # 512
+            out_channels=channels_list[10],  # 512
+            kernel_size=3,
+            stride=2,
+            activation_type="relu",
+        )
+
+        self.Rep_n6 = stage_block(
+            in_channels=channels_list[6] + channels_list[10],  # 512 + 512
+            out_channels=channels_list[11],  # 1024
+            n=num_repeats[11],
+            e=csp_e,
+            block=block,
+        )
+
+    def forward(self, input):
+        (x4, x3, x2, x1, x0) = input
+
+        fpn_out0 = self.reduce_layer0(x0)
+        f_concat_layer0 = self.Bifusion0([fpn_out0, x1, x2])
+        f_out0 = self.Rep_p5(f_concat_layer0)
+
+        fpn_out1 = self.reduce_layer1(f_out0)
+        f_concat_layer1 = self.Bifusion1([fpn_out1, x2, x3])
+        f_out1 = self.Rep_p4(f_concat_layer1)
+
+        fpn_out2 = self.reduce_layer2(f_out1)
+        f_concat_layer2 = self.Bifusion2([fpn_out2, x3, x4])
+        pan_out3 = self.Rep_p3(f_concat_layer2)  # P3
+
+        down_feat2 = self.downsample2(pan_out3)
+        p_concat_layer2 = torch.cat([down_feat2, fpn_out2], 1)
+        pan_out2 = self.Rep_n4(p_concat_layer2)  # P4
+
+        down_feat1 = self.downsample1(pan_out2)
+        p_concat_layer1 = torch.cat([down_feat1, fpn_out1], 1)
+        pan_out1 = self.Rep_n5(p_concat_layer1)  # P5
+
+        down_feat0 = self.downsample0(pan_out1)
+        p_concat_layer0 = torch.cat([down_feat0, fpn_out0], 1)
+        pan_out0 = self.Rep_n6(p_concat_layer0)  # P6
+
+        outputs = [pan_out3, pan_out2, pan_out1, pan_out0]
+
+        return outputs
+
+
 class Yolov6Embeddings(nn.Module):
     def __init__(self, config: Yolov6Config) -> None:
         super().__init__()
@@ -705,8 +889,10 @@ class Yolov6Embeddings(nn.Module):
 
         if config.block_type == "Yolov6ConvBNSilu":
             block = Yolov6ConvLayer
+            activation_type = "silu"
         elif config.block_type == "Yolov6RepVGGBlock":
             block = Yolov6RepVGGBlock
+            activation_type = None
         else:
             raise NotImplementedError
 
@@ -715,6 +901,7 @@ class Yolov6Embeddings(nn.Module):
             out_channels=config.backbone_out_channels[0],
             kernel_size=3,
             stride=2,
+            activation_type=activation_type,
         )
 
         self.in_channels = config.in_channels
@@ -744,14 +931,16 @@ class Yolov6Encoder(nn.Module):
         assert config.backbone_num_repeats is not None
 
         if config.block_type == "Yolov6ConvBNSilu":
-            block = Yolov6ConvLayer
+            activation_type = "silu"
+            block = partial(Yolov6ConvLayer, activation_type=activation_type)
         elif config.block_type == "Yolov6RepVGGBlock":
-            block = Yolov6RepVGGBlock
+            activation_type = "relu"
+            block = partial(Yolov6RepVGGBlock, activation_type=None)
         else:
             raise NotImplementedError
 
         if config.backbone_stage_block_type == "Yolov6BepC3":
-            stage_block = Yolov6BepC3
+            stage_block = partial(Yolov6BepC3, activation_type=activation_type)
         elif config.backbone_stage_block_type == "Yolov6RepBlock":
             stage_block = Yolov6RepBlock
         else:
@@ -843,12 +1032,33 @@ class Yolov6Neck(nn.Module):
         channels_list = config.backbone_out_channels + config.neck_out_channels
         num_repeats = config.backbone_num_repeats + config.neck_num_repeats
 
-        self.stage = RepBiFPANNeck(
-            channels_list=channels_list,
-            num_repeats=num_repeats,
-            csp_e=config.neck_csp_e,
-            stage_block_type=config.neck_stage_block_type,
-        )
+        if config.block_type == "Yolov6ConvBNSilu":
+            activation_type = "silu"
+            block = partial(Yolov6ConvLayer, activation_type=activation_type)
+        elif config.block_type == "Yolov6RepVGGBlock":
+            activation_type = "relu"
+            block = Yolov6RepVGGBlock
+        else:
+            raise NotImplementedError
+
+        if len(config.backbone_out_channels) == 5:
+            self.stage = RepBiFPANNeck(
+                channels_list=channels_list,
+                num_repeats=num_repeats,
+                block=block,
+                csp_e=config.neck_csp_e,
+                stage_block_type=config.neck_stage_block_type,
+                activation_type=activation_type,
+            )
+        else:
+            self.stage = RepBiFPANNeck_P6(
+                channels_list=channels_list,
+                num_repeats=num_repeats,
+                block=block,
+                csp_e=config.neck_csp_e,
+                stage_block_type=config.neck_stage_block_type,
+                activation_type=activation_type,
+            )
 
     def forward(
         self,
@@ -863,31 +1073,41 @@ class Yolov6Head(nn.Module):
         super().__init__()
 
         layers = []
+        index_function = (lambda x: 2 * x + 1) if len(config.backbone_out_channels) == 5 else (lambda x: x + 2)
+
         for i in range(config.head_num_layers):
             layers += [
                 Yolov6ConvLayer(
-                    config.neck_out_channels[2 * i + 1],
-                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
                     kernel_size=1,
                     stride=1,
                     activation_type="silu",
                 ),
                 Yolov6ConvLayer(
-                    config.neck_out_channels[2 * i + 1],
-                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
                     kernel_size=3,
                     stride=1,
                     activation_type="silu",
                 ),
                 Yolov6ConvLayer(
-                    config.neck_out_channels[2 * i + 1],
-                    config.neck_out_channels[2 * i + 1],
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
                     kernel_size=3,
                     stride=1,
                     activation_type="silu",
                 ),
-                nn.Conv2d(config.neck_out_channels[2 * i + 1], config.num_labels, kernel_size=1),
-                nn.Conv2d(config.neck_out_channels[2 * i + 1], 4 * (config.reg_max + 1), kernel_size=1),
+                nn.Conv2d(
+                    config.neck_out_channels[index_function(i)],
+                    config.num_labels,
+                    kernel_size=1,
+                ),
+                nn.Conv2d(
+                    config.neck_out_channels[index_function(i)],
+                    4 * (config.reg_max + 1),
+                    kernel_size=1,
+                ),
             ]
         head_layers = nn.Sequential(*layers)
 
@@ -941,7 +1161,8 @@ class Yolov6Head(nn.Module):
             conv.weight = torch.nn.Parameter(w, requires_grad=True)
 
         self.proj = nn.Parameter(
-            torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1), requires_grad=False
+            torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1),
+            requires_grad=False,
         )
         self.proj_conv.weight = nn.Parameter(
             self.proj.view([1, self.config.reg_max_proj + 1, 1, 1]).clone().detach(),
@@ -950,7 +1171,6 @@ class Yolov6Head(nn.Module):
 
     def forward(self, x):
         cls_score_list = []
-        # reg_dist_list = []
         reg_distri_list = []
 
         for i in range(self.config.head_num_layers):
@@ -980,8 +1200,8 @@ class Yolov6Head(nn.Module):
                     cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
                     reg_distri_list.append(reg_output.reshape([b, 4, l]))
 
-                if self.config.export:
-                    return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
+        if self.config.export:
+            return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
 
         if self.training:
             cls_score_list = torch.cat(cls_score_list, axis=1)
@@ -1000,6 +1220,7 @@ class Yolov6Head(nn.Module):
             )
             pred_bboxes = dist2bbox(pred_bboxes, anchor_points, box_format="xywh")
             pred_bboxes *= stride_tensor
+            print("stride_tensor", stride_tensor)
 
         return x, cls_score_list, pred_bboxes
 
@@ -1229,7 +1450,12 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
 
         # hacky solution for evaluation : normalize pred_boxes into 0~1 scale
         pred_boxes = pred_boxes / torch.tensor(
-            [pixel_values.shape[-1], pixel_values.shape[-2], pixel_values.shape[-1], pixel_values.shape[-2]]
+            [
+                pixel_values.shape[-1],
+                pixel_values.shape[-2],
+                pixel_values.shape[-1],
+                pixel_values.shape[-2],
+            ]
         ).to(pred_boxes.device)
 
         if not return_dict:
@@ -1465,7 +1691,13 @@ class Yolov6Loss(nn.Module):
             target_bboxes_pos = torch.masked_select(target_bboxes, bbox_mask).reshape([-1, 4])
             bbox_weight = torch.masked_select(target_scores.sum(-1), fg_mask).unsqueeze(-1)
             loss_iou = (
-                iou_loss(pred_bboxes_pos, target_bboxes_pos, iou_type=self.iou_type, box_format="xyxy") * bbox_weight
+                iou_loss(
+                    pred_bboxes_pos,
+                    target_bboxes_pos,
+                    iou_type=self.iou_type,
+                    box_format="xyxy",
+                )
+                * bbox_weight
             )
 
             # dfl loss
@@ -1515,7 +1747,11 @@ class Yolov6Loss(nn.Module):
                 List of dicts, such that `len(targets) == batch_size`. The expected keys in each dict depends on the
                 losses applied, see each loss' doc.
         """
-        feats, logits, pred_distri = outputs["feats"], outputs["logits"], outputs["pred_boxes"]
+        feats, logits, pred_distri = (
+            outputs["feats"],
+            outputs["logits"],
+            outputs["pred_boxes"],
+        )
         pred_scores = logits.sigmoid()
         outputs["pred_scores"] = pred_scores
 
@@ -1524,7 +1760,11 @@ class Yolov6Loss(nn.Module):
         else:
             self.cached_feat_sizes = [feat.shape[2:] for feat in feats]
             anchors, anchor_points, n_anchors_list, stride_tensor = generate_anchors(
-                feats, self.fpn_strides, self.grid_cell_size, self.grid_cell_offset, device=feats[0].device
+                feats,
+                self.fpn_strides,
+                self.grid_cell_size,
+                self.grid_cell_offset,
+                device=feats[0].device,
             )
             self.cached_anchors = anchors, anchor_points, n_anchors_list, stride_tensor
 
@@ -1537,9 +1777,10 @@ class Yolov6Loss(nn.Module):
                 torch.cat(
                     [
                         v["class_labels"],
-                        -torch.ones(max_size - v["class_labels"].size(0), dtype=v["class_labels"].dtype).to(
-                            v["class_labels"].device
-                        ),
+                        -torch.ones(
+                            max_size - v["class_labels"].size(0),
+                            dtype=v["class_labels"].dtype,
+                        ).to(v["class_labels"].device),
                     ]
                 )
                 for v in targets
@@ -1566,7 +1807,12 @@ class Yolov6Loss(nn.Module):
         outputs["pred_bboxes"] = pred_bboxes
 
         target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
-            pred_scores.detach(), pred_bboxes.detach() * stride_tensor, anchor_points, gt_labels, gt_bboxes, mask_gt
+            pred_scores.detach(),
+            pred_bboxes.detach() * stride_tensor,
+            anchor_points,
+            gt_labels,
+            gt_bboxes,
+            mask_gt,
         )
 
         # rescale bbox
@@ -1763,7 +2009,12 @@ class TaskAlignedAssigner(nn.Module):
             )
 
         cycle, step, self.bs = (1, self.bs, self.bs) if self.n_max_boxes <= 100 else (self.bs, 1, 1)
-        target_labels_lst, target_bboxes_lst, target_scores_lst, fg_mask_lst = [], [], [], []
+        target_labels_lst, target_bboxes_lst, target_scores_lst, fg_mask_lst = (
+            [],
+            [],
+            [],
+            [],
+        )
         # loop batch dim in case of numerous object box
         for i in range(cycle):
             start, end = i * step, (i + 1) * step
@@ -1812,7 +2063,8 @@ class TaskAlignedAssigner(nn.Module):
         mask_in_gts = select_candidates_in_gts(anc_points, gt_bboxes)
         # get topk_metric mask
         mask_topk = self.select_topk_candidates(
-            align_metric * mask_in_gts, topk_mask=mask_gt.repeat([1, 1, self.topk]).bool()
+            align_metric * mask_in_gts,
+            topk_mask=mask_gt.repeat([1, 1, self.topk]).bool(),
         )
         # merge all mask to a final mask
         mask_pos = mask_topk * mask_in_gts * mask_gt

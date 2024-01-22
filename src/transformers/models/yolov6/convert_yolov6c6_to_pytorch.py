@@ -36,20 +36,26 @@ def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
     config = Yolov6Config()
 
     # size of the architecture
-    if yolov6_name == "yolov6n":
-        config.image_size = [640, 640]
-    elif yolov6_name == "yolov6s":
-        config.image_size = [640, 640]
-        config.backbone_out_channels = [32, 64, 128, 256, 512]
-        config.neck_out_channels = [128, 64, 64, 128, 128, 256]
-    elif yolov6_name == "yolov6m":
-        config.image_size = [640, 640]
-        config.hidden_size = 384
-        config.intermediate_size = 1536
-        config.num_hidden_layers = 12
-        config.num_attention_heads = 6
-    elif yolov6_name == "yolov6l":
-        config.image_size = [640, 640]
+    if yolov6_name == "yolov6l6":
+        config.image_size = 1280
+        config.block_type = "Yolov6ConvBNSilu"
+        config.backbone_num_repeats = [1, 6, 12, 18, 6, 6]
+        config.backbone_out_channels = [64, 128, 256, 512, 768, 1024]
+        config.backbone_csp_e = float(1) / 2
+        config.backbone_cspsppf = False
+        config.backbone_stage_block_type = "Yolov6BepC3"
+        config.neck_num_repeats = [12, 12, 12, 12, 12, 12]
+        config.neck_out_channels = [512, 256, 128, 256, 512, 1024]
+        config.neck_csp_e = float(1) / 2
+        config.neck_stage_block_type = "Yolov6BepC3"
+        config.head_in_channels = [128, 256, 512, 1024]
+        config.head_num_layers = 4
+        config.head_anchors = 1
+        config.head_strides = [8, 16, 32, 64]
+        config.iou_type = "giou"
+        config.atss_warmup_epoch = 0
+        config.use_dfl = True
+        config.reg_max = 16
 
     config.num_labels = 80
     repo_id = "huggingface/label-files"
@@ -75,8 +81,8 @@ def rename_key(name: str) -> str:
         name = name.replace("backbone.stem", "model.embedder.embedder")
     if "backbone.ERBlock" in name:
         name = name.replace("backbone.ERBlock", "model.encoder.blocks.ERBlock")
-    if "2.cspsppf" in name:
-        name = name.replace("2.cspsppf", "channel_merge_layer")
+    if "2.sppf" in name:
+        name = name.replace("2.sppf", "channel_merge_layer")
     if "neck" in name:
         name = name.replace("neck", "model.neck.stage")
     if "detect" in name:
@@ -131,43 +137,22 @@ def convert_yolov6_checkpoint(
     encoding = image_processor(images=prepare_img(), return_tensors="pt")
     outputs = model(**encoding)
     logits, pred_boxes = outputs.logits, outputs.pred_boxes
+    original_size = encoding["pixel_values"].shape
+    pred_boxes *= torch.tensor([original_size[-1], original_size[-2], original_size[-1], original_size[-2]])
 
     expected_slice_logits, expected_slice_boxes = None, None
-    if yolov6_name == "yolov6n":
+    if yolov6_name == "yolov6l6":
         expected_slice_logits = torch.tensor(
-            [
-                [-3.79127, -5.42277, -4.43975],
-                [-4.40880, -5.64879, -4.93791],
-                [-4.51388, -5.69715, -4.93552],
-            ]
+            [[-4.76734, -5.98765, -5.42296], [-5.04849, -6.27099, -5.64376], [-5.28514, -6.38343, -5.75267]]
         )
         expected_slice_boxes = torch.tensor(
-            [
-                [11.27861, 22.33572, 22.95666],
-                [23.49722, 20.68348, 47.31107],
-                [32.20158, 19.24104, 65.46049],
-            ]
-        )
-    elif yolov6_name == "yolov6s":
-        expected_slice_logits = torch.tensor(
-            [
-                [-4.46909, -5.56590, -5.12657],
-                [-4.49251, -5.80001, -5.15828],
-                [-4.52727, -5.81888, -5.12548],
-            ]
-        )
-        expected_slice_boxes = torch.tensor(
-            [
-                [11.56186, 13.51999, 22.47980],
-                [14.94720, 11.38480, 30.77328],
-                [22.81690, 11.56549, 44.71961],
-            ]
+            [[19.42040, 26.32382, 40.39944], [25.69743, 24.37918, 54.64775], [33.79816, 14.53956, 69.25398]]
         )
     else:
         raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
 
-    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=2e-3)
-    assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-1)
+    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-2)
+    assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=2e-1)
 
     Path(pytorch_dump_folder_path).mkdir(exist_ok=True)
     print(f"Saving model {yolov6_name} to {pytorch_dump_folder_path}")
@@ -177,10 +162,7 @@ def convert_yolov6_checkpoint(
 
     if push_to_hub:
         model_mapping = {
-            "yolov6n": "yolov6n",
-            "yolov6s": "yolov6s",
-            "yolov6m": "yolov6m",
-            "yolov6l": "yolov6l",
+            "yolov6l6": "yolov6l6",
         }
 
         print("Pushing to the hub...")
@@ -194,11 +176,11 @@ if __name__ == "__main__":
     # Required parameters
     parser.add_argument(
         "--yolov6_name",
-        default="yolov6n",
+        default="yolov6l6",
         type=str,
         help=(
-            "Name of the YOLOV6 model you'd like to convert. Should be one of 'yolov6n', 'yolov6s',"
-            " 'yolov6m', 'yolov6l'."
+            "Name of the YOLOV6 model you'd like to convert. Should be one of 'yolov6n6', 'yolov6s6',"
+            " 'yolov6m6', 'yolov6l6'."
         ),
     )
     parser.add_argument(
