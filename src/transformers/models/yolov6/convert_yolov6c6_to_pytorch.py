@@ -34,6 +34,7 @@ logger = logging.get_logger(__name__)
 
 def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
     config = Yolov6Config()
+    config.model_type = yolov6_name
 
     # size of the architecture
     if yolov6_name == "yolov6l6":

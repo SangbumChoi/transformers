@@ -34,22 +34,19 @@ logger = logging.get_logger(__name__)
 
 def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
     config = Yolov6Config()
+    config.model_type = yolov6_name
 
     # size of the architecture
     if yolov6_name == "yolov6n":
-        config.image_size = [640, 640]
+        config.image_size = 640
     elif yolov6_name == "yolov6s":
-        config.image_size = [640, 640]
+        config.image_size = 640
         config.backbone_out_channels = [32, 64, 128, 256, 512]
         config.neck_out_channels = [128, 64, 64, 128, 128, 256]
     elif yolov6_name == "yolov6m":
-        config.image_size = [640, 640]
-        config.hidden_size = 384
-        config.intermediate_size = 1536
-        config.num_hidden_layers = 12
-        config.num_attention_heads = 6
+        config.image_size = 640
     elif yolov6_name == "yolov6l":
-        config.image_size = [640, 640]
+        config.image_size = 640
 
     config.num_labels = 80
     repo_id = "huggingface/label-files"
