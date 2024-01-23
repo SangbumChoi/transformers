@@ -433,6 +433,7 @@ class Yolov6RepBlock(nn.Module):
         block=Yolov6RepVGGBlock,
         basic_block=Yolov6RepVGGBlock,
         activation_type=None,
+        **kwargs
     ):
         super().__init__()
 
@@ -942,7 +943,7 @@ class Yolov6Encoder(nn.Module):
         if config.backbone_stage_block_type == "Yolov6BepC3":
             stage_block = partial(Yolov6BepC3, activation_type=activation_type)
         elif config.backbone_stage_block_type == "Yolov6RepBlock":
-            stage_block = Yolov6RepBlock
+            stage_block = partial(Yolov6RepBlock, activation_type=activation_type)
         else:
             raise NotImplementedError
 
@@ -1190,16 +1191,16 @@ class Yolov6Head(nn.Module):
                 reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
             else:
                 if self.config.use_dfl:
-                    reg_output = reg_output.reshape([-1, 4, self.config.reg_max + 1, l]).permute(0, 2, 1, 3)
+                    reg_output = reg_output.reshape([-1, 4, self.config.reg_max_proj + 1, l]).permute(0, 2, 1, 3)
                     reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
-
+                
                 if self.config.export:
                     cls_score_list.append(cls_output)
                     reg_distri_list.append(reg_output)
                 else:
                     cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
                     reg_distri_list.append(reg_output.reshape([b, 4, l]))
-
+                
         if self.config.export:
             return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
 
@@ -1220,7 +1221,6 @@ class Yolov6Head(nn.Module):
             )
             pred_bboxes = dist2bbox(pred_bboxes, anchor_points, box_format="xywh")
             pred_bboxes *= stride_tensor
-            print("stride_tensor", stride_tensor)
 
         return x, cls_score_list, pred_bboxes
 
@@ -1418,6 +1418,9 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             return_dict=return_dict,
         )
 
+        # Only maintain reg_max value to non-zero in training pipeline
+        reg_max = self.config.reg_max if self.training else 0
+
         feats, logits, pred_boxes = self.head(outputs.hidden_states)
         loss, loss_dict = None, None
         if labels is not None:
@@ -1426,9 +1429,9 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 num_classes=self.config.num_labels,
                 warmup_epoch=self.config.atss_warmup_epoch,
                 use_dfl=self.config.use_dfl,
-                reg_max=self.config.reg_max,
                 iou_type=self.config.iou_type,
                 fpn_strides=self.config.head_strides,
+                reg_max=reg_max,
                 losses=losses,
             )
             criterion.to(self.device)
@@ -1455,7 +1458,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 pixel_values.shape[-2],
                 pixel_values.shape[-1],
                 pixel_values.shape[-2],
-            ]
+            ] * (reg_max + 1)
         ).to(pred_boxes.device)
 
         if not return_dict:
@@ -1606,9 +1609,9 @@ class Yolov6Loss(nn.Module):
         num_classes,
         warmup_epoch,
         use_dfl,
-        reg_max,
         iou_type,
         fpn_strides,
+        reg_max,
         losses,
         grid_cell_size=5.0,
         grid_cell_offset=0.5,
@@ -1628,10 +1631,10 @@ class Yolov6Loss(nn.Module):
 
         self.use_dfl = use_dfl
         self.reg_max = reg_max
-
+        self.proj = nn.Parameter(torch.linspace(0, self.reg_max, self.reg_max + 1), requires_grad=False)
         self.iou_type = iou_type
-        self.box_format = "xyxy"
 
+        self.box_format = "xyxy"
         self.gamma = 2.0
         self.alpha = 0.75
 

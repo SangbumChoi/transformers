@@ -138,13 +138,6 @@ class Yolov6Config(PretrainedConfig):
     ):
         super().__init__(**kwargs)
 
-        # deprecated due to unexpected behavior in huggingface push_to_hub
-        # backbone_num_repeats = [(max(round(i * depth_multiple), 1) if i > 1 else i) for i in backbone_num_repeats]
-        # neck_num_repeats = [(max(round(i * depth_multiple), 1) if i > 1 else i) for i in neck_num_repeats]
-
-        # backbone_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in backbone_out_channels]
-        # neck_out_channels = [math.ceil(i * width_multiple / 8) * 8 for i in neck_out_channels]
-
         self.in_channels = in_channels
         self.block_type = block_type
         self.backbone_num_repeats = backbone_num_repeats

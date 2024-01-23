@@ -128,6 +128,8 @@ def convert_yolov6_checkpoint(
     encoding = image_processor(images=prepare_img(), return_tensors="pt")
     outputs = model(**encoding)
     logits, pred_boxes = outputs.logits, outputs.pred_boxes
+    original_size = encoding["pixel_values"].shape
+    pred_boxes *= torch.tensor([original_size[-1], original_size[-2], original_size[-1], original_size[-2]])
 
     expected_slice_logits, expected_slice_boxes = None, None
     if yolov6_name == "yolov6n":
@@ -163,7 +165,7 @@ def convert_yolov6_checkpoint(
     else:
         raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
 
-    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=2e-3)
+    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-3)
     assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-1)
 
     Path(pytorch_dump_folder_path).mkdir(exist_ok=True)
