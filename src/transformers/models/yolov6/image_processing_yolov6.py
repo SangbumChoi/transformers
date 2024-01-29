@@ -351,7 +351,7 @@ def make_divisible(x, divisor):
     return math.ceil(x / divisor) * divisor
 
 
-def check_img_size(imgsz, s=32, floor=256):
+def check_img_size(imgsz, s=64, floor=256):
     # Check and adjust image size to be a multiple of stride s in each dimension
     if isinstance(imgsz, int):  # If it's an integer, e.g., img_size=640
         new_size = max(make_divisible(imgsz, s), floor)

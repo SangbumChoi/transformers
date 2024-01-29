@@ -26,8 +26,10 @@ from ...utils import logging
 logger = logging.get_logger(__name__)
 
 YOLOV6_PRETRAINED_CONFIG_ARCHIVE_MAP = {
-    "hustvl/yolos-small": "https://huggingface.co/hustvl/yolos-small/resolve/main/config.json",
-    # See all YOLOS models at https://huggingface.co/models?filter=yolos
+    "superb-ai/yolov6n": "https://huggingface.co/superb-ai/yolov6n/blob/main/config.json",
+    "superb-ai/yolov6s": "https://huggingface.co/superb-ai/yolov6s/blob/main/config.json",
+    "superb-ai/yolov6l6": "https://huggingface.co/superb-ai/yolov6l6/blob/main/config.json",
+    # See all YOLOV6 models at https://huggingface.co/models?filter=yolov6
 }
 
 
