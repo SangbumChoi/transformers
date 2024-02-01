@@ -901,6 +901,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         threshold: float = 0.03,
         target_sizes: Union[TensorType, List[Tuple]] = None,
         nms_threshold: float = 0.65,
+        max_nms: int = 30000,
     ):
         """
         Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
@@ -931,8 +932,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
 
         boxes = center_to_corners_format(out_bbox)
         boxes = torch.gather(boxes, 1, all_boxes.unsqueeze(-1).repeat(1, 1, 4))
-        # rescale the boxes with the normalized coordinate
-        # boxes = boxes / torch.tensor([self.resize_img[1], self.resize_img[0], self.resize_img[1], self.resize_img[0]]).to(boxes.device)
 
         # and from relative [0, config.img_size] to absolute [0, height] coordinates
         if target_sizes is not None:
@@ -951,6 +950,16 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             score = all_scores[b]
             lbls = all_labels[b]
 
+            box = box[score > threshold]
+            lbls = lbls[score > threshold]
+            score = score[score > threshold]
+
+            if score.shape[-1] > max_nms:
+                indices = score.argsort(descending=True)[:max_nms]
+                box = box[indices, :]
+                lbls = lbls[indices]
+                score = score[indices]
+
             # apply NMS
             # keep_inds = batched_nms(box, score, lbls, nms_threshold)[:300]
             keep_inds = nms(box, score, nms_threshold)[:300]
@@ -960,9 +969,9 @@ class Yolov6ImageProcessor(BaseImageProcessor):
 
             results.append(
                 {
-                    "scores": score[score > threshold],
-                    "labels": lbls[score > threshold],
-                    "boxes": box[score > threshold],
+                    "scores": score,
+                    "labels": lbls,
+                    "boxes": box,
                 }
             )
 
