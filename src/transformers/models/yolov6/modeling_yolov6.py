@@ -1186,20 +1186,21 @@ class Yolov6Head(nn.Module):
             reg_output = self.reg_preds[i](reg_feat)
 
             if self.training:
+                # cls_output = torch.sigmoid(cls_output)
                 cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
                 reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
             else:
                 if self.config.use_dfl:
                     reg_output = reg_output.reshape([-1, 4, self.config.reg_max_proj + 1, l]).permute(0, 2, 1, 3)
                     reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
-
+                
                 if self.config.export:
                     cls_score_list.append(cls_output)
                     reg_distri_list.append(reg_output)
                 else:
                     cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
                     reg_distri_list.append(reg_output.reshape([b, 4, l]))
-
+                
         if self.config.export:
             return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
 
@@ -1417,11 +1418,11 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             return_dict=return_dict,
         )
 
-        feats, logits, pred_boxes = self.head(outputs.hidden_states)
-        loss, loss_dict = None, None
-
         # Only maintain reg_max value to non-zero in training pipeline
         reg_max = self.config.reg_max if self.training else 0
+
+        feats, logits, pred_boxes = self.head(outputs.hidden_states)
+        loss, loss_dict = None, None
 
         if labels is not None:
             losses = ["classes", "boxes"]
@@ -1432,9 +1433,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 iou_type=self.config.iou_type,
                 fpn_strides=self.config.head_strides,
                 reg_max=reg_max,
-                reg_max_proj=self.config.reg_max_proj,
                 losses=losses,
-                training=self.training,
             )
             criterion.to(self.device)
             # Third: compute the losses, based on outputs and labels
@@ -1442,6 +1441,12 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             outputs_loss["feats"] = feats
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
+
+            if not self.training:
+                import pickle
+                
+                torch.save(outputs_loss, '/mnt/nas2/users/sbchoi/model-service/output/output_loss.pt')
+                torch.save(labels, '/mnt/nas2/users/sbchoi/model-service/output/labels.pt')
 
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
@@ -1614,9 +1619,7 @@ class Yolov6Loss(nn.Module):
         iou_type,
         fpn_strides,
         reg_max,
-        reg_max_proj,
         losses,
-        training,
         grid_cell_size=5.0,
         grid_cell_offset=0.5,
     ):
@@ -1628,7 +1631,6 @@ class Yolov6Loss(nn.Module):
         self.grid_cell_offset = grid_cell_offset
         self.num_classes = num_classes
         self.losses = losses
-        self.training = training
 
         self.warmup_epoch = warmup_epoch
         self.warmup_assigner = ATSSAssigner(9, num_classes=self.num_classes)
@@ -1636,7 +1638,6 @@ class Yolov6Loss(nn.Module):
 
         self.use_dfl = use_dfl
         self.reg_max = reg_max
-        self.reg_max_proj = reg_max_proj
         self.proj = nn.Parameter(torch.linspace(0, self.reg_max, self.reg_max + 1), requires_grad=False)
         self.iou_type = iou_type
 
@@ -1710,10 +1711,10 @@ class Yolov6Loss(nn.Module):
             )
 
             # dfl loss
-            if self.use_dfl and self.training:
+            if self.use_dfl:
                 dist_mask = fg_mask.unsqueeze(-1).repeat([1, 1, (self.reg_max + 1) * 4])
                 pred_dist_pos = torch.masked_select(pred_dist, dist_mask).reshape([-1, 4, self.reg_max + 1])
-                target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max_proj)
+                target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
                 target_ltrb_pos = torch.masked_select(target_ltrb, bbox_mask).reshape([-1, 4])
                 loss_dfl = df_loss(pred_dist_pos, target_ltrb_pos, self.reg_max) * bbox_weight
             else:
@@ -1817,13 +1818,13 @@ class Yolov6Loss(nn.Module):
         outputs["pred_bboxes"] = pred_bboxes
 
         # if epoch_num < self.warmup_epoch:
-        # target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
-        #             anchors,
-        #             n_anchors_list,
-        #             gt_labels,
-        #             gt_bboxes,
-        #             mask_gt,
-        #             pred_bboxes.detach() * stride_tensor)
+            # target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
+            #             anchors,
+            #             n_anchors_list,
+            #             gt_labels,
+            #             gt_bboxes,
+            #             mask_gt,
+            #             pred_bboxes.detach() * stride_tensor)
 
         target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
             pred_scores.detach(),
@@ -1833,6 +1834,8 @@ class Yolov6Loss(nn.Module):
             gt_bboxes,
             mask_gt,
         )
+        # print(target_labels.shape, target_bboxes.shape, target_scores.shape)
+        print((target_labels >= target_scores.shape[-1]-1).sum(), (target_labels >= target_scores.shape[-1]).sum(), (target_labels < 0).sum(), (target_labels <= 0).sum(), ((target_scores > 1) | (target_scores < 0)).sum())
 
         # rescale bbox
         target_bboxes /= stride_tensor
