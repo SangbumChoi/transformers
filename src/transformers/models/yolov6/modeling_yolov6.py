@@ -1434,6 +1434,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 fpn_strides=self.config.head_strides,
                 reg_max=reg_max,
                 losses=losses,
+                training=self.training
             )
             criterion.to(self.device)
             # Third: compute the losses, based on outputs and labels
@@ -1441,12 +1442,6 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
             outputs_loss["feats"] = feats
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
-
-            if not self.training:
-                import pickle
-                
-                torch.save(outputs_loss, '/mnt/nas2/users/sbchoi/model-service/output/output_loss.pt')
-                torch.save(labels, '/mnt/nas2/users/sbchoi/model-service/output/labels.pt')
 
             loss_dict = criterion(outputs_loss, labels)
             # Fourth: compute total loss, as a weighted sum of the various losses
@@ -1620,6 +1615,7 @@ class Yolov6Loss(nn.Module):
         fpn_strides,
         reg_max,
         losses,
+        training,
         grid_cell_size=5.0,
         grid_cell_offset=0.5,
     ):
@@ -1631,6 +1627,7 @@ class Yolov6Loss(nn.Module):
         self.grid_cell_offset = grid_cell_offset
         self.num_classes = num_classes
         self.losses = losses
+        self.training = training
 
         self.warmup_epoch = warmup_epoch
         self.warmup_assigner = ATSSAssigner(9, num_classes=self.num_classes)
@@ -1711,7 +1708,7 @@ class Yolov6Loss(nn.Module):
             )
 
             # dfl loss
-            if self.use_dfl:
+            if self.use_dfl and self.training:
                 dist_mask = fg_mask.unsqueeze(-1).repeat([1, 1, (self.reg_max + 1) * 4])
                 pred_dist_pos = torch.masked_select(pred_dist, dist_mask).reshape([-1, 4, self.reg_max + 1])
                 target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max)
@@ -1834,8 +1831,6 @@ class Yolov6Loss(nn.Module):
             gt_bboxes,
             mask_gt,
         )
-        # print(target_labels.shape, target_bboxes.shape, target_scores.shape)
-        print((target_labels >= target_scores.shape[-1]-1).sum(), (target_labels >= target_scores.shape[-1]).sum(), (target_labels < 0).sum(), (target_labels <= 0).sum(), ((target_scores > 1) | (target_scores < 0)).sum())
 
         # rescale bbox
         target_bboxes /= stride_tensor
