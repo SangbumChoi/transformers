@@ -433,7 +433,7 @@ class Yolov6RepBlock(nn.Module):
         block=Yolov6RepVGGBlock,
         basic_block=Yolov6RepVGGBlock,
         activation_type=None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
 
@@ -1193,14 +1193,14 @@ class Yolov6Head(nn.Module):
                 if self.config.use_dfl:
                     reg_output = reg_output.reshape([-1, 4, self.config.reg_max_proj + 1, l]).permute(0, 2, 1, 3)
                     reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
-                
+
                 if self.config.export:
                     cls_score_list.append(cls_output)
                     reg_distri_list.append(reg_output)
                 else:
                     cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
                     reg_distri_list.append(reg_output.reshape([b, 4, l]))
-                
+
         if self.config.export:
             return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
 
@@ -1210,6 +1210,7 @@ class Yolov6Head(nn.Module):
         else:
             cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
             pred_bboxes = torch.cat(reg_distri_list, axis=-1).permute(0, 2, 1)
+
             anchor_points, stride_tensor = generate_anchors(
                 x,
                 self.stride,
@@ -1434,7 +1435,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 fpn_strides=self.config.head_strides,
                 reg_max=reg_max,
                 losses=losses,
-                training=self.training
+                training=self.training,
             )
             criterion.to(self.device)
             # Third: compute the losses, based on outputs and labels
@@ -1460,7 +1461,8 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
                 pixel_values.shape[-2],
                 pixel_values.shape[-1],
                 pixel_values.shape[-2],
-            ] * (reg_max + 1)
+            ]
+            * (reg_max + 1)
         ).to(pred_boxes.device)
 
         if not return_dict:
@@ -1813,41 +1815,49 @@ class Yolov6Loss(nn.Module):
         outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
-
-        # if epoch_num < self.warmup_epoch:
-            # target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
-            #             anchors,
-            #             n_anchors_list,
-            #             gt_labels,
-            #             gt_bboxes,
-            #             mask_gt,
-            #             pred_bboxes.detach() * stride_tensor)
-
-        target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
-            pred_scores.detach(),
-            pred_bboxes.detach() * stride_tensor,
-            anchor_points,
-            gt_labels,
-            gt_bboxes,
-            mask_gt,
-        )
+        # in case of pred_scores might contain nan in train/validation step
+        contains_nan = torch.isnan(pred_scores).any().item() or torch.isnan(pred_bboxes).any().item()
+        if contains_nan:
+            target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
+                anchors,
+                n_anchors_list,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+                None,  # pred_bboxes.detach() * stride_tensor
+            )
+        else:
+            target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
+                pred_scores.detach(),
+                pred_bboxes.detach() * stride_tensor,
+                anchor_points,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+            )
 
         # rescale bbox
         target_bboxes /= stride_tensor
 
-        targets_ = {}
-        targets_["target_scores"] = target_scores
-        targets_["target_labels"] = target_labels
-        targets_["target_bboxes"] = target_bboxes
+        batch_targets = {}
+        batch_targets["target_scores"] = target_scores
+        batch_targets["target_labels"] = target_labels
+        batch_targets["target_bboxes"] = target_bboxes
 
         target_scores_sum = target_scores.sum()
         if target_scores_sum < 1:
             target_scores_sum = 1
 
+        if not self.training:
+            torch.save(outputs["pred_scores"].float(), "/mnt/nas2/users/sbchoi/model-service/output/pred_scores.pt")
+            torch.save(
+                batch_targets["target_scores"].float(), "/mnt/nas2/users/sbchoi/model-service/output/target_scores.pt"
+            )
+
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets_, fg_mask, target_scores_sum))
+            losses.update(self.get_loss(loss, outputs, batch_targets, fg_mask, target_scores_sum))
 
         return losses
 
@@ -1917,7 +1927,6 @@ class ATSSAssigner(nn.Module):
 
         # assigned target
         target_labels, target_bboxes, target_scores = self.get_targets(gt_labels, gt_bboxes, target_gt_idx, fg_mask)
-
         # soft label with iou
         if pd_bboxes is not None:
             ious = iou_calculator(gt_bboxes, pd_bboxes) * mask_pos
