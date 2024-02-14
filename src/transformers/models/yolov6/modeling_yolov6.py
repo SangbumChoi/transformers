@@ -1069,163 +1069,6 @@ class Yolov6Neck(nn.Module):
         return hidden_state
 
 
-class Yolov6Head(nn.Module):
-    def __init__(self, config: Yolov6Config):  # detection layer
-        super().__init__()
-
-        layers = []
-        index_function = (lambda x: 2 * x + 1) if len(config.backbone_out_channels) == 5 else (lambda x: x + 2)
-
-        for i in range(config.head_num_layers):
-            layers += [
-                Yolov6ConvLayer(
-                    config.neck_out_channels[index_function(i)],
-                    config.neck_out_channels[index_function(i)],
-                    kernel_size=1,
-                    stride=1,
-                    activation_type="silu",
-                ),
-                Yolov6ConvLayer(
-                    config.neck_out_channels[index_function(i)],
-                    config.neck_out_channels[index_function(i)],
-                    kernel_size=3,
-                    stride=1,
-                    activation_type="silu",
-                ),
-                Yolov6ConvLayer(
-                    config.neck_out_channels[index_function(i)],
-                    config.neck_out_channels[index_function(i)],
-                    kernel_size=3,
-                    stride=1,
-                    activation_type="silu",
-                ),
-                nn.Conv2d(
-                    config.neck_out_channels[index_function(i)],
-                    config.num_labels,
-                    kernel_size=1,
-                ),
-                nn.Conv2d(
-                    config.neck_out_channels[index_function(i)],
-                    4 * (config.reg_max + 1),
-                    kernel_size=1,
-                ),
-            ]
-        head_layers = nn.Sequential(*layers)
-
-        self.config = config
-
-        self.grid = [torch.zeros(1)] * config.head_num_layers
-        self.prior_prob = 1e-2
-        self.inplace = True
-        self.stride = torch.tensor(config.head_strides)
-        self.proj_conv = nn.Conv2d(config.reg_max_proj + 1, 1, 1, bias=False)
-        self.grid_cell_offset = 0.5
-        self.grid_cell_size = 5.0
-
-        # Init decouple head
-        self.stems = nn.ModuleList()
-        self.cls_convs = nn.ModuleList()
-        self.reg_convs = nn.ModuleList()
-        self.cls_preds = nn.ModuleList()
-        self.reg_preds = nn.ModuleList()
-
-        # Efficient decoupled head layers
-        for i in range(config.head_num_layers):
-            idx = i * 5
-            self.stems.append(head_layers[idx])
-            self.cls_convs.append(head_layers[idx + 1])
-            self.reg_convs.append(head_layers[idx + 2])
-            self.cls_preds.append(head_layers[idx + 3])
-            self.reg_preds.append(head_layers[idx + 4])
-
-        self.initialize_biases()
-
-    def initialize_biases(self):
-        for conv in self.cls_preds:
-            b = conv.bias.view(
-                -1,
-            )
-            b.data.fill_(-math.log((1 - self.prior_prob) / self.prior_prob))
-            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
-            w = conv.weight
-            w.data.fill_(0.0)
-            conv.weight = torch.nn.Parameter(w, requires_grad=True)
-
-        for conv in self.reg_preds:
-            b = conv.bias.view(
-                -1,
-            )
-            b.data.fill_(1.0)
-            conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
-            w = conv.weight
-            w.data.fill_(0.0)
-            conv.weight = torch.nn.Parameter(w, requires_grad=True)
-
-        self.proj = nn.Parameter(
-            torch.linspace(0, self.config.reg_max_proj, self.config.reg_max_proj + 1),
-            requires_grad=False,
-        )
-        self.proj_conv.weight = nn.Parameter(
-            self.proj.view([1, self.config.reg_max_proj + 1, 1, 1]).clone().detach(),
-            requires_grad=False,
-        )
-
-    def forward(self, x):
-        cls_score_list = []
-        reg_distri_list = []
-
-        for i in range(self.config.head_num_layers):
-            b, _, h, w = x[i].shape
-            l = h * w
-            x[i] = self.stems[i](x[i])
-            cls_x = x[i]
-            reg_x = x[i]
-            cls_feat = self.cls_convs[i](cls_x)
-            cls_output = self.cls_preds[i](cls_feat)
-            reg_feat = self.reg_convs[i](reg_x)
-            reg_output = self.reg_preds[i](reg_feat)
-
-            if self.training:
-                # cls_output = torch.sigmoid(cls_output)
-                cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
-                reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
-            else:
-                if self.config.use_dfl:
-                    reg_output = reg_output.reshape([-1, 4, self.config.reg_max_proj + 1, l]).permute(0, 2, 1, 3)
-                    reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
-
-                if self.config.export:
-                    cls_score_list.append(cls_output)
-                    reg_distri_list.append(reg_output)
-                else:
-                    cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
-                    reg_distri_list.append(reg_output.reshape([b, 4, l]))
-
-        if self.config.export:
-            return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
-
-        if self.training:
-            cls_score_list = torch.cat(cls_score_list, axis=1)
-            pred_bboxes = torch.cat(reg_distri_list, axis=1)
-        else:
-            cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
-            pred_bboxes = torch.cat(reg_distri_list, axis=-1).permute(0, 2, 1)
-
-            anchor_points, stride_tensor = generate_anchors(
-                x,
-                self.stride,
-                self.grid_cell_size,
-                self.grid_cell_offset,
-                device=x[0].device,
-                is_eval=True,
-                mode="af",
-            )
-            pred_bboxes = dist2bbox(pred_bboxes, anchor_points, box_format="xywh")
-            pred_bboxes *= stride_tensor
-
-        return x, cls_score_list, pred_bboxes
-
-
 class Yolov6PreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
@@ -1282,6 +1125,132 @@ YOLOV6_INPUTS_DOCSTRING = r"""
         return_dict (`bool`, *optional*):
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
 """
+
+
+class Yolov6Head(Yolov6PreTrainedModel):
+    def __init__(self, config: Yolov6Config):  # detection layer
+        super().__init__(config)
+
+        index_function = (lambda x: 2 * x + 1) if len(config.backbone_out_channels) == 5 else (lambda x: x + 2)
+        self.stems = nn.ModuleList(
+            [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
+                    kernel_size=1,
+                    activation_type="silu",
+                )
+                for i in range(config.head_num_layers)
+            ]
+        )
+
+        self.cls_convs = nn.ModuleList(
+            [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
+                    kernel_size=1,
+                    activation_type="silu",
+                )
+                for i in range(config.head_num_layers)
+            ]
+        )
+        self.reg_convs = nn.ModuleList(
+            [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[index_function(i)],
+                    config.neck_out_channels[index_function(i)],
+                    kernel_size=1,
+                    activation_type="silu",
+                )
+                for i in range(config.head_num_layers)
+            ]
+        )
+        self.cls_preds = nn.ModuleList(
+            [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[index_function(i)],
+                    config.num_labels,
+                    kernel_size=1,
+                )
+                for i in range(config.head_num_layers)
+            ]
+        )
+        self.reg_preds = nn.ModuleList(
+            [
+                Yolov6ConvLayer(
+                    config.neck_out_channels[index_function(i)],
+                    4 * (config.reg_max + 1),
+                    kernel_size=1,
+                )
+                for i in range(config.head_num_layers)
+            ]
+        )
+
+        self.stride = torch.tensor(config.head_strides)
+
+        self.post_init()
+
+        self.proj = nn.Parameter(
+            torch.linspace(0, config.reg_max_proj, config.reg_max_proj + 1),
+            requires_grad=False,
+        )
+        self.proj_conv = nn.Conv2d(config.reg_max_proj + 1, 1, 1, bias=False)
+        self.proj_conv.weight = nn.Parameter(
+            self.proj.view([1, config.reg_max_proj + 1, 1, 1]).clone().detach(),
+            requires_grad=False,
+        )
+
+    def forward(self, x):
+        cls_score_list = []
+        reg_distri_list = []
+
+        for i in range(self.config.head_num_layers):
+            b, _, h, w = x[i].shape
+            l = h * w
+            x[i] = self.stems[i](x[i])
+            cls_x = x[i]
+            reg_x = x[i]
+            cls_feat = self.cls_convs[i](cls_x)
+            cls_output = self.cls_preds[i](cls_feat)
+            reg_feat = self.reg_convs[i](reg_x)
+            reg_output = self.reg_preds[i](reg_feat)
+
+            if self.training:
+                cls_score_list.append(cls_output.flatten(2).permute((0, 2, 1)))
+                reg_distri_list.append(reg_output.flatten(2).permute((0, 2, 1)))
+            else:
+                if self.config.use_dfl:
+                    reg_output = reg_output.reshape([-1, 4, self.config.reg_max_proj + 1, l]).permute(0, 2, 1, 3)
+                    reg_output = self.proj_conv(nn.functional.softmax(reg_output, dim=1))
+
+                if self.config.export:
+                    cls_score_list.append(cls_output)
+                    reg_distri_list.append(reg_output)
+                else:
+                    cls_score_list.append(cls_output.reshape([b, self.config.num_labels, l]))
+                    reg_distri_list.append(reg_output.reshape([b, 4, l]))
+
+        if self.config.export:
+            return tuple(torch.cat([cls, reg], 1) for cls, reg in zip(cls_score_list, reg_distri_list))
+
+        if self.training:
+            cls_score_list = torch.cat(cls_score_list, axis=1)
+            pred_bboxes = torch.cat(reg_distri_list, axis=1)
+        else:
+            cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
+            pred_bboxes = torch.cat(reg_distri_list, axis=-1).permute(0, 2, 1)
+
+            anchor_points, stride_tensor = generate_anchors(
+                x,
+                self.stride,
+                device=x[0].device,
+                is_eval=True,
+            )
+            pred_bboxes = dist2bbox(pred_bboxes, anchor_points, box_format="xywh")
+            pred_bboxes *= stride_tensor
+
+        return x, cls_score_list, pred_bboxes
 
 
 @add_start_docstrings(
@@ -1618,15 +1587,11 @@ class Yolov6Loss(nn.Module):
         reg_max,
         losses,
         training,
-        grid_cell_size=5.0,
-        grid_cell_offset=0.5,
     ):
         super().__init__()
         self.fpn_strides = fpn_strides
         self.cached_feat_sizes = [torch.Size([0, 0]) for _ in fpn_strides]
         self.cached_anchors = None
-        self.grid_cell_size = grid_cell_size
-        self.grid_cell_offset = grid_cell_offset
         self.num_classes = num_classes
         self.losses = losses
         self.training = training
@@ -1771,8 +1736,6 @@ class Yolov6Loss(nn.Module):
             anchors, anchor_points, n_anchors_list, stride_tensor = generate_anchors(
                 feats,
                 self.fpn_strides,
-                self.grid_cell_size,
-                self.grid_cell_offset,
                 device=feats[0].device,
             )
             self.cached_anchors = anchors, anchor_points, n_anchors_list, stride_tensor
@@ -1847,12 +1810,6 @@ class Yolov6Loss(nn.Module):
         target_scores_sum = target_scores.sum()
         if target_scores_sum < 1:
             target_scores_sum = 1
-
-        if not self.training:
-            torch.save(outputs["pred_scores"].float(), "/mnt/nas2/users/sbchoi/model-service/output/pred_scores.pt")
-            torch.save(
-                batch_targets["target_scores"].float(), "/mnt/nas2/users/sbchoi/model-service/output/target_scores.pt"
-            )
 
         # Compute all the requested losses
         losses = {}
