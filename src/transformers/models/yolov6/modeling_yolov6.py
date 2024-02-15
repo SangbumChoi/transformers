@@ -1149,7 +1149,6 @@ class Yolov6Head(Yolov6PreTrainedModel):
                 Yolov6ConvLayer(
                     config.neck_out_channels[index_function(i)],
                     config.neck_out_channels[index_function(i)],
-                    kernel_size=1,
                     activation_type="silu",
                 )
                 for i in range(config.head_num_layers)
@@ -1160,7 +1159,6 @@ class Yolov6Head(Yolov6PreTrainedModel):
                 Yolov6ConvLayer(
                     config.neck_out_channels[index_function(i)],
                     config.neck_out_channels[index_function(i)],
-                    kernel_size=1,
                     activation_type="silu",
                 )
                 for i in range(config.head_num_layers)
