@@ -1735,6 +1735,7 @@ class Yolov6Loss(nn.Module):
                 feats,
                 self.fpn_strides,
                 device=feats[0].device,
+                is_eval=not self.training,
             )
             self.cached_anchors = anchors, anchor_points, n_anchors_list, stride_tensor
 
