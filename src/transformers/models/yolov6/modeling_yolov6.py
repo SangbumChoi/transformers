@@ -186,8 +186,8 @@ class Yolov6ConvLayer(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size=3,
-        stride=1,
+        kernel_size: int = 3,
+        stride: int = 1,
         padding=None,
         groups=1,
         bias=False,
@@ -1166,7 +1166,7 @@ class Yolov6Head(Yolov6PreTrainedModel):
         )
         self.cls_preds = nn.ModuleList(
             [
-                Yolov6ConvLayer(
+                nn.Conv2d(
                     config.neck_out_channels[index_function(i)],
                     config.num_labels,
                     kernel_size=1,
@@ -1176,7 +1176,7 @@ class Yolov6Head(Yolov6PreTrainedModel):
         )
         self.reg_preds = nn.ModuleList(
             [
-                Yolov6ConvLayer(
+                nn.Conv2d(
                     config.neck_out_channels[index_function(i)],
                     4 * (config.reg_max + 1),
                     kernel_size=1,
