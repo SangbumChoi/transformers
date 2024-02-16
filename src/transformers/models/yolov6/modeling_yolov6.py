@@ -144,7 +144,6 @@ def generate_anchors(
                 stride_tensor.append(torch.full((h * w, 1), stride, dtype=feats[0].dtype, device=device).repeat(3, 1))
         anchor_points = torch.cat(anchor_points)
         stride_tensor = torch.cat(stride_tensor)
-        return anchor_points, stride_tensor
     else:
         for i, stride in enumerate(fpn_strides):
             _, _, h, w = feats[i].shape
@@ -178,7 +177,7 @@ def generate_anchors(
         anchors = torch.cat(anchors)
         anchor_points = torch.cat(anchor_points).to(device)
         stride_tensor = torch.cat(stride_tensor).to(device)
-        return anchors, anchor_points, num_anchors_list, stride_tensor
+    return anchors, anchor_points, num_anchors_list, stride_tensor
 
 
 class Yolov6ConvLayer(nn.Module):
@@ -1239,7 +1238,7 @@ class Yolov6Head(Yolov6PreTrainedModel):
             cls_score_list = torch.cat(cls_score_list, axis=-1).permute(0, 2, 1)
             pred_bboxes = torch.cat(reg_distri_list, axis=-1).permute(0, 2, 1)
 
-            anchor_points, stride_tensor = generate_anchors(
+            _, anchor_points, _, stride_tensor = generate_anchors(
                 x,
                 self.stride,
                 device=x[0].device,
