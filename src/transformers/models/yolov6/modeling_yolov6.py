@@ -1777,17 +1777,8 @@ class Yolov6Loss(nn.Module):
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
         # in case of pred_scores might contain nan in train/validation step
-        contains_nan = torch.isnan(pred_scores).any().item() or torch.isnan(pred_bboxes).any().item()
-        if contains_nan:
-            target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
-                anchors,
-                n_anchors_list,
-                gt_labels,
-                gt_bboxes,
-                mask_gt,
-                None,  # pred_bboxes.detach() * stride_tensor
-            )
-        else:
+        contains_nan = torch.isnan(pred_scores).any().item()
+        if not contains_nan or not self.training:
             target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
                 pred_scores.detach(),
                 pred_bboxes.detach() * stride_tensor,
@@ -1795,6 +1786,15 @@ class Yolov6Loss(nn.Module):
                 gt_labels,
                 gt_bboxes,
                 mask_gt,
+            )
+        else:
+            target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
+                anchors,
+                n_anchors_list,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+                pred_bboxes.detach() * stride_tensor,
             )
 
         # rescale bbox
