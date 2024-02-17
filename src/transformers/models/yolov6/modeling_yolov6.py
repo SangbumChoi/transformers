@@ -1724,6 +1724,12 @@ class Yolov6Loss(nn.Module):
             outputs["pred_boxes"],
         )
         pred_scores = logits.sigmoid()
+        # in case of pred_scores might contain nan in train/validation step
+        # tmp method for avoid NaN value in the pred_scores
+        if not self.training:
+            pred_scores[pred_scores != pred_scores] = 0
+            pred_distri[pred_distri != pred_distri] = 0
+
         outputs["pred_scores"] = pred_scores
 
         if all(feat.shape[2:] == cfsize for feat, cfsize in zip(feats, self.cached_feat_sizes)):
@@ -1776,9 +1782,7 @@ class Yolov6Loss(nn.Module):
         outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
-        # in case of pred_scores might contain nan in train/validation step
-        contains_nan = torch.isnan(pred_scores).any().item()
-        if not contains_nan or not self.training:
+        if not self.training:
             target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
                 pred_scores.detach(),
                 pred_bboxes.detach() * stride_tensor,
