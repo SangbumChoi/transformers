@@ -156,6 +156,20 @@ def get_resize_output_image_size(
     return get_size_with_aspect_ratio(image_size, size, max_size)
 
 
+# Copied from transformers.models.detr.image_processing_detr.safe_squeeze
+def safe_squeeze(arr: np.ndarray, axis: Optional[int] = None) -> np.ndarray:
+    """
+    Squeezes an array, but only if the axis specified has dim 1.
+    """
+    if axis is None:
+        return arr.squeeze()
+
+    try:
+        return arr.squeeze(axis=axis)
+    except ValueError:
+        return arr
+
+
 # Copied from transformers.models.detr.image_processing_detr.normalize_annotation
 def normalize_annotation(annotation: Dict, image_size: Tuple[int, int]) -> Dict:
     image_height, image_width = image_size
@@ -408,6 +422,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         do_normalize: bool = False,
         image_mean: Union[float, List[float]] = None,
         image_std: Union[float, List[float]] = None,
+        do_convert_annotations: Optional[bool] = None,
         do_pad: bool = True,
         **kwargs,
     ) -> None:
@@ -426,6 +441,10 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         size = size if size is not None else {"shortest_edge": 640, "longest_edge": 640}
         size = get_size_dict(size, max_size=max_size, default_to_square=False)
 
+        # Backwards compatibility
+        if do_convert_annotations is None:
+            do_convert_annotations = do_normalize
+
         super().__init__(**kwargs)
         self.format = format
         self.do_resize = do_resize
@@ -434,6 +453,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         self.do_rescale = do_rescale
         self.rescale_factor = rescale_factor
         self.do_normalize = do_normalize
+        self.do_convert_annotations = do_convert_annotations
         self.image_mean = image_mean if image_mean is not None else IMAGENET_DEFAULT_MEAN
         self.image_std = image_std if image_std is not None else IMAGENET_DEFAULT_STD
         self.do_pad = do_pad
@@ -598,14 +618,60 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         """
         return normalize_annotation(annotation, image_size=image_size)
 
+    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor._update_annotation_for_padded_image
+    def _update_annotation_for_padded_image(
+        self,
+        annotation: Dict,
+        input_image_size: Tuple[int, int],
+        output_image_size: Tuple[int, int],
+        padding,
+        update_bboxes,
+    ) -> Dict:
+        """
+        Update the annotation for a padded image.
+        """
+        new_annotation = {}
+        new_annotation["size"] = output_image_size
+
+        for key, value in annotation.items():
+            if key == "masks":
+                masks = value
+                masks = pad(
+                    masks,
+                    padding,
+                    mode=PaddingMode.CONSTANT,
+                    constant_values=0,
+                    input_data_format=ChannelDimension.FIRST,
+                )
+                masks = safe_squeeze(masks, 1)
+                new_annotation["masks"] = masks
+            elif key == "boxes" and update_bboxes:
+                boxes = value
+                boxes *= np.asarray(
+                    [
+                        input_image_size[1] / output_image_size[1],
+                        input_image_size[0] / output_image_size[0],
+                        input_image_size[1] / output_image_size[1],
+                        input_image_size[0] / output_image_size[0],
+                    ]
+                )
+                new_annotation["boxes"] = boxes
+            elif key == "size":
+                new_annotation["size"] = output_image_size
+            else:
+                new_annotation[key] = value
+        return new_annotation
+
     # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor._pad_image
     def _pad_image(
         self,
         image: np.ndarray,
         output_size: Tuple[int, int],
+        annotation: Optional[Dict[str, Any]] = None,
         constant_values: Union[float, Iterable[float]] = 0,
         data_format: Optional[ChannelDimension] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        update_bboxes: bool = True,
     ) -> np.ndarray:
         """
         Pad an image with zeros to the given size.
@@ -624,24 +690,32 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             data_format=data_format,
             input_data_format=input_data_format,
         )
-        return padded_image
+        if annotation is not None:
+            annotation = self._update_annotation_for_padded_image(
+                annotation, (input_height, input_width), (output_height, output_width), padding, update_bboxes
+            )
+        return padded_image, annotation
 
     def pad(
         self,
         images: List[np.ndarray],
+        annotations: Optional[Union[AnnotationType, List[AnnotationType]]] = None,
         constant_values: Union[float, Iterable[float]] = 0,
-        return_pixel_mask: bool = False,
+        return_pixel_mask: bool = True,
         return_tensors: Optional[Union[str, TensorType]] = None,
         data_format: Optional[ChannelDimension] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
+        update_bboxes: bool = True,
     ) -> BatchFeature:
         """
         Pads a batch of images to the bottom and right of the image with zeros to the size of largest height and width
         in the batch and optionally returns their corresponding pixel mask.
 
         Args:
-            image (`np.ndarray`):
-                Image to pad.
+            images (List[`np.ndarray`]):
+                Images to pad.
+            annotations (`AnnotationType` or `List[AnnotationType]`, *optional*):
+                Annotations to transform according to the padding that is applied to the images.
             constant_values (`float` or `Iterable[float]`, *optional*):
                 The value to use for the padding if `mode` is `"constant"`.
             return_pixel_mask (`bool`, *optional*, defaults to `True`):
@@ -657,19 +731,29 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 The channel dimension format of the image. If not provided, it will be the same as the input image.
             input_data_format (`ChannelDimension` or `str`, *optional*):
                 The channel dimension format of the input image. If not provided, it will be inferred.
+            update_bboxes (`bool`, *optional*, defaults to `True`):
+                Whether to update the bounding boxes in the annotations to match the padded images. If the
+                bounding boxes have not been converted to relative coordinates and `(centre_x, centre_y, width, height)`
+                format, the bounding boxes will not be updated.
         """
         pad_size = get_max_height_width(images, input_data_format=input_data_format)
 
-        padded_images = [
-            self._pad_image(
+        annotation_list = annotations if annotations is not None else [None] * len(images)
+        padded_images = []
+        padded_annotations = []
+        for image, annotation in zip(images, annotation_list):
+            padded_image, padded_annotation = self._pad_image(
                 image,
                 pad_size,
+                annotation,
                 constant_values=constant_values,
                 data_format=data_format,
                 input_data_format=input_data_format,
+                update_bboxes=update_bboxes,
             )
-            for image in images
-        ]
+            padded_images.append(padded_image)
+            padded_annotations.append(padded_annotation)
+
         data = {"pixel_values": padded_images}
 
         if return_pixel_mask:
@@ -679,7 +763,14 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             ]
             data["pixel_mask"] = masks
 
-        return BatchFeature(data=data, tensor_type=return_tensors)
+        encoded_inputs = BatchFeature(data=data, tensor_type=return_tensors)
+
+        if annotations is not None:
+            encoded_inputs["labels"] = [
+                BatchFeature(annotation, tensor_type=return_tensors) for annotation in padded_annotations
+            ]
+
+        return encoded_inputs
 
     def preprocess(
         self,
@@ -693,6 +784,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         do_rescale: Optional[bool] = None,
         rescale_factor: Optional[Union[int, float]] = None,
         do_normalize: Optional[bool] = None,
+        do_convert_annotations: Optional[bool] = None,
         image_mean: Optional[Union[float, List[float]]] = None,
         image_std: Optional[Union[float, List[float]]] = None,
         do_pad: Optional[bool] = None,
@@ -736,6 +828,10 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 Rescale factor to use when rescaling the image.
             do_normalize (`bool`, *optional*, defaults to self.do_normalize):
                 Whether to normalize the image.
+            do_convert_annotations (`bool`, *optional*, defaults to self.do_convert_annotations):
+                Whether to convert the annotations to the format expected by the model. Converts the bounding
+                boxes from the format `(top_left_x, top_left_y, width, height)` to `(center_x, center_y, width, height)`
+                and in relative coordinates.
             image_mean (`float` or `List[float]`, *optional*, defaults to self.image_mean):
                 Mean to use when normalizing the image.
             image_std (`float` or `List[float]`, *optional*, defaults to self.image_std):
@@ -779,6 +875,9 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         do_normalize = self.do_normalize if do_normalize is None else do_normalize
         image_mean = self.image_mean if image_mean is None else image_mean
         image_std = self.image_std if image_std is None else image_std
+        do_convert_annotations = (
+            self.do_convert_annotations if do_convert_annotations is None else do_convert_annotations
+        )
         do_pad = self.do_pad if do_pad is None else do_pad
         format = self.format if format is None else format
 
@@ -868,7 +967,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         if do_rescale:
             images = [self.rescale(image, rescale_factor, input_data_format=input_data_format) for image in images]
 
-        if do_normalize:
+        if do_convert_annotations and do_normalize:
             images = [
                 self.normalize(image, image_mean, image_std, input_data_format=input_data_format) for image in images
             ]
@@ -879,19 +978,26 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 ]
 
         if do_pad:
-            data = self.pad(images, data_format=data_format, input_data_format=input_data_format)
+            # Pads images and returns their mask: {'pixel_values': ..., 'pixel_mask': ...}
+            encoded_inputs = self.pad(
+                images,
+                annotations=annotations,
+                return_pixel_mask=True,
+                data_format=data_format,
+                input_data_format=input_data_format,
+                return_tensors=return_tensors,
+                update_bboxes=do_convert_annotations,
+            )
         else:
             images = [
                 to_channel_dimension_format(image, data_format, input_channel_dim=input_data_format)
                 for image in images
             ]
-            data = {"pixel_values": images}
-
-        encoded_inputs = BatchFeature(data=data, tensor_type=return_tensors)
-        if annotations is not None:
-            encoded_inputs["labels"] = [
-                BatchFeature(annotation, tensor_type=return_tensors) for annotation in annotations
-            ]
+            encoded_inputs = BatchFeature(data={"pixel_values": images}, tensor_type=return_tensors)
+            if annotations is not None:
+                encoded_inputs["labels"] = [
+                    BatchFeature(annotation, tensor_type=return_tensors) for annotation in annotations
+                ]
 
         return encoded_inputs
 
