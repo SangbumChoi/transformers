@@ -131,7 +131,7 @@ class Yolov6Config(PretrainedConfig):
         reg_max=0,  # if use_dfl is False, please set reg_max to 0
         reg_max_proj=16,
         class_loss_coefficient=1.0,
-        iou_loss_coefficient=1.0,
+        iou_loss_coefficient=2.5,
         dfl_loss_coefficient=1.0,
         initializer_range=0.02,
         forward_fuse=False,
