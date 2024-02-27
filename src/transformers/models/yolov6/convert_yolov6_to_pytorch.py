@@ -44,9 +44,29 @@ def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
         config.backbone_out_channels = [32, 64, 128, 256, 512]
         config.neck_out_channels = [128, 64, 64, 128, 128, 256]
     elif yolov6_name == "yolov6m":
-        config.image_size = 640
+        pass
     elif yolov6_name == "yolov6l":
-        config.image_size = 640
+        pass
+    elif yolov6_name == "yolov6l6":
+        config.image_size = 1280
+        config.block_type = "Yolov6ConvBNSilu"
+        config.backbone_num_repeats = [1, 6, 12, 18, 6, 6]
+        config.backbone_out_channels = [64, 128, 256, 512, 768, 1024]
+        config.backbone_csp_e = float(1) / 2
+        config.backbone_cspsppf = False
+        config.backbone_stage_block_type = "Yolov6BepC3"
+        config.neck_num_repeats = [12, 12, 12, 12, 12, 12]
+        config.neck_out_channels = [512, 256, 128, 256, 512, 1024]
+        config.neck_csp_e = float(1) / 2
+        config.neck_stage_block_type = "Yolov6BepC3"
+        config.head_in_channels = [128, 256, 512, 1024]
+        config.head_num_layers = 4
+        config.head_anchors = 1
+        config.head_strides = [8, 16, 32, 64]
+        config.iou_type = "giou"
+        config.atss_warmup_epoch = 0
+        config.use_dfl = True
+        config.reg_max = 16
 
     config.num_labels = 80
     repo_id = "huggingface/label-files"
@@ -109,7 +129,7 @@ def convert_yolov6_checkpoint(
     push_to_hub: bool = False,
 ):
     """
-    Copy/paste/tweak model's weights to our YOLOS structure.
+    Copy/paste/tweak model's weights to our YOLOV6 structure.
     """
     config = get_yolov6_config(yolov6_name)
 
@@ -162,6 +182,13 @@ def convert_yolov6_checkpoint(
                 [22.81690, 11.56549, 44.71961],
             ]
         )
+    elif yolov6_name == "yolov6l6":
+        expected_slice_logits = torch.tensor(
+            [[-4.76734, -5.98765, -5.42296], [-5.04849, -6.27099, -5.64376], [-5.28514, -6.38343, -5.75267]]
+        )
+        expected_slice_boxes = torch.tensor(
+            [[19.42040, 26.32382, 40.39944], [25.69743, 24.37918, 54.64775], [33.79816, 14.53956, 69.25398]]
+        )
     else:
         raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
 
@@ -180,6 +207,7 @@ def convert_yolov6_checkpoint(
             "yolov6s": "yolov6s",
             "yolov6m": "yolov6m",
             "yolov6l": "yolov6l",
+            "yolov6l6": "yolov6l6",
         }
 
         print("Pushing to the hub...")
@@ -197,7 +225,7 @@ if __name__ == "__main__":
         type=str,
         help=(
             "Name of the YOLOV6 model you'd like to convert. Should be one of 'yolov6n', 'yolov6s',"
-            " 'yolov6m', 'yolov6l'."
+            " 'yolov6m', 'yolov6l', 'yolov6l6'."
         ),
     )
     parser.add_argument(
