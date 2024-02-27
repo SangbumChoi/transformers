@@ -94,6 +94,8 @@ def rename_key(name: str) -> str:
         name = name.replace("backbone.ERBlock", "model.encoder.blocks.ERBlock")
     if "2.cspsppf" in name:
         name = name.replace("2.cspsppf", "channel_merge_layer")
+    if "2.sppf" in name:
+        name = name.replace("2.sppf", "channel_merge_layer")
     if "neck" in name:
         name = name.replace("neck", "model.neck.stage")
     if "detect" in name:

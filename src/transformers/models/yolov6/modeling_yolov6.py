@@ -1326,6 +1326,7 @@ class Yolov6ForObjectDetection(Yolov6PreTrainedModel):
     def forward(
         self,
         pixel_values: torch.FloatTensor,
+        pixel_mask: Optional[torch.LongTensor] = None,
         labels: Optional[List[Dict]] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
