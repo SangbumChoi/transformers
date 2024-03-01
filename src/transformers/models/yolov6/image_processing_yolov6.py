@@ -1067,7 +1067,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 score = score[indices]
 
             # apply NMS
-            # keep_inds = batched_nms(box, score, lbls, nms_threshold)[:300]
             keep_inds = nms(box, score, nms_threshold)[:300]
             score = score[keep_inds]
             lbls = lbls[keep_inds]
