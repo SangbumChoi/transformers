@@ -2375,6 +2375,7 @@ class Mask2FormerForUniversalSegmentation(Mask2FormerPreTrainedModel):
         pixel_values: Tensor,
         mask_labels: Optional[List[Tensor]] = None,
         class_labels: Optional[List[Tensor]] = None,
+        labels: Optional[List[Dict]] = None,
         pixel_mask: Optional[Tensor] = None,
         output_hidden_states: Optional[bool] = None,
         output_auxiliary_logits: Optional[bool] = None,
@@ -2387,6 +2388,8 @@ class Mask2FormerForUniversalSegmentation(Mask2FormerPreTrainedModel):
         class_labels (`List[torch.LongTensor]`, *optional*):
             list of target class labels of shape `(num_labels, height, width)` to be fed to a model. They identify the
             labels of `mask_labels`, e.g. the label of `mask_labels[i][j]` if `class_labels[i][j]`.
+        labels (`List[Dict]` of len `(batch_size,)`, *optional*):
+            List of original annotations.
 
         Returns:
             `Mask2FormerUniversalSegmentationOutput`
