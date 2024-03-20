@@ -1897,8 +1897,8 @@ class DetrImageProcessor(BaseImageProcessor):
 
             instance_maps, segments = [], []
             current_segment_id = 0
-            for j in range(num_queries):
-                score = pred_scores[j].item()
+            for j, score in enumerate(pred_scores):
+                score = score.item()
 
                 if not torch.all(pred_masks[j] == 0) and score >= threshold:
                     segmentation[pred_masks[j] == 1] = current_segment_id
