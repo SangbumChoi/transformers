@@ -1121,18 +1121,22 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
             pred_scores = scores_per_image * mask_scores_per_image
             pred_classes = labels_per_image
 
+            mask_pred, pred_scores, pred_classes = remove_low_and_no_objects(
+                mask_pred, pred_scores, pred_classes, threshold, num_classes
+            )
+
             segmentation = torch.zeros((384, 384)) - 1
             if target_sizes is not None:
                 size = target_sizes[i] if isinstance(target_sizes[i], tuple) else target_sizes[i].cpu().tolist()
                 segmentation = torch.zeros(size) - 1
                 pred_masks = torch.nn.functional.interpolate(
-                    pred_masks.unsqueeze(0), size=size, mode="nearest"
+                    pred_masks.unsqueeze(0).cpu(), size=size, mode="nearest"
                 )[0]
 
             instance_maps, segments = [], []
             current_segment_id = 0
-            for j in range(num_queries):
-                score = pred_scores[j].item()
+            for j, score in enumerate(pred_scores):
+                score = score.item()
 
                 if not torch.all(pred_masks[j] == 0) and score >= threshold:
                     segmentation[pred_masks[j] == 1] = current_segment_id

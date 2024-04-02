@@ -1855,11 +1855,6 @@ class DetrImageProcessor(BaseImageProcessor):
         num_classes = class_queries_logits.shape[-1] - 1
         num_queries = class_queries_logits.shape[-2]
 
-        # mask_probs = masks_queries_logits.sigmoid()  # [batch_size, num_queries, height, width]
-
-        # # Predicted label and score of each query (batch_size, num_queries)
-        # pred_scores, pred_labels = nn.functional.softmax(class_queries_logits, dim=-1).max(-1)
-
         # Loop over items in batch size
         results: List[Dict[str, TensorType]] = []
 
