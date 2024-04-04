@@ -132,7 +132,7 @@ class Yolov6Config(PretrainedConfig):
         reg_max_proj=16,
         class_loss_coefficient=1.0,
         iou_loss_coefficient=2.5,
-        dfl_loss_coefficient=1.0,
+        dfl_loss_coefficient=0.5,
         initializer_range=0.02,
         forward_fuse=False,
         export=False,
