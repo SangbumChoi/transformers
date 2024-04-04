@@ -1081,12 +1081,9 @@ class Yolov6PreTrainedModel(PreTrainedModel):
 
     def _init_weights(self, module: Union[nn.Linear, nn.Conv2d, nn.LayerNorm]) -> None:
         """Initialize the weights"""
-        if isinstance(module, (nn.Linear, nn.Conv2d)):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
-                module.bias.data.zero_()
+        if isinstance(module, nn.BatchNorm2d):
+            module.eps = 1e-3
+            module.momentum = 3e-2
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
@@ -1564,14 +1561,22 @@ class Yolov6Loss(nn.Module):
 
 
     Args:
-        matcher (`YolosHungarianMatcher`):
-            Module able to compute a matching between targets and proposals.
         num_classes (`int`):
             Number of object categories, omitting the special no-object category.
-        eos_coef (`float`):
-            Relative classification weight applied to the no-object category.
+        warmup_epoch (`int`):
+            Warming up epoch to use either ATSSAssigner, or TaskAlignedAssigner. However, it is not used due to incompatibility.
+        use_dfl (`bool`):
+            Whether to use dfl_loss.
+        iou_type (`str`):
+            Different types of iou such as giou, ciou, diou.
+        fpn_strides (`List[int]`):
+            List of int to generate strides in feature pyramid network.
+        reg_max (`int`):
+            Max number of regression.
         losses (`List[str]`):
             List of all the losses to be applied. See `get_loss` for a list of all available losses.
+        training (`bool`):
+            Wheter it is training or inference stage.
     """
 
     def __init__(
@@ -1782,7 +1787,7 @@ class Yolov6Loss(nn.Module):
         outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
-        if not self.training:
+        if not self.training or self.warmup_epoch == 0:
             target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
                 pred_scores.detach(),
                 pred_bboxes.detach() * stride_tensor,
