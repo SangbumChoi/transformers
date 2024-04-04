@@ -1549,7 +1549,6 @@ def df_loss(pred_dist, target, reg_max):
     return (loss_left + loss_right).mean(-1, keepdim=True)
 
 
-# Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->Yolos
 class Yolov6Loss(nn.Module):
     """
     This class computes the losses for Yolov6ForObjectDetection. The process happens in two steps: 1)

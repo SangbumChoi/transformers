@@ -46,7 +46,6 @@ from ...pytorch_utils import meshgrid
 from ...utils import is_accelerate_available, is_ninja_available, is_torchvision_available, logging, requires_backends
 from ...utils.backbone_utils import load_backbone
 from .configuration_deta import DetaConfig
-from .load_custom import load_cuda_kernels
 
 
 logger = logging.get_logger(__name__)
