@@ -27,7 +27,7 @@ import torch.utils.checkpoint
 from torch import Tensor, nn
 
 from ...activations import ACT2FN
-from ...modeling_outputs import BackboneOutput, BaseModelOutputWithNoAttention
+from ...modeling_outputs import BaseModelOutputWithNoAttention
 from ...modeling_utils import PreTrainedModel
 from ...utils import (
     ModelOutput,
@@ -66,11 +66,6 @@ YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST = [
 
 
 @dataclass
-class Yolov6ModelOutput(BackboneOutput):
-    loss: Optional[torch.FloatTensor] = None
-
-
-@dataclass
 class Yolov6ObjectDetectionOutput(ModelOutput):
     """
     Output type of [`Yolov6ForObjectDetection`].
@@ -89,10 +84,6 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
             values are normalized in [0, 1], relative to the size of each individual image in the batch (disregarding
             possible padding). You can use [`~YolosImageProcessor.post_process`] to retrieve the unnormalized bounding
             boxes.
-        auxiliary_outputs (`list[Dict]`, *optional*):
-            Optional, only returned when auxilary losses are activated (i.e. `config.auxiliary_loss` is set to `True`)
-            and labels are provided. It is a list of dictionaries containing the two above keys (`logits` and
-            `pred_boxes`) for each decoder layer.
         last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
             Sequence of hidden-states at the output of the last layer of the decoder of the model.
         hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
@@ -1787,7 +1778,8 @@ class Yolov6Loss(nn.Module):
         outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
-        if not self.training or self.warmup_epoch == 0:
+        # original implementation of assigner is using warmup_epoch
+        try:
             target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
                 pred_scores.detach(),
                 pred_bboxes.detach() * stride_tensor,
@@ -1796,7 +1788,7 @@ class Yolov6Loss(nn.Module):
                 gt_bboxes,
                 mask_gt,
             )
-        else:
+        except:
             target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
                 anchors,
                 n_anchors_list,
