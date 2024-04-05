@@ -1788,7 +1788,7 @@ class Yolov6Loss(nn.Module):
                 gt_bboxes,
                 mask_gt,
             )
-        except:
+        except BaseException:
             target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
                 anchors,
                 n_anchors_list,
