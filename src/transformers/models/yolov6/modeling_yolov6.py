@@ -1779,24 +1779,24 @@ class Yolov6Loss(nn.Module):
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
         # original implementation of assigner is using warmup_epoch
-        # try:
-        #     target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
-        #         pred_scores.detach(),
-        #         pred_bboxes.detach() * stride_tensor,
-        #         anchor_points,
-        #         gt_labels,
-        #         gt_bboxes,
-        #         mask_gt,
-        #     )
-        # except BaseException:
-        target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
-            anchors,
-            n_anchors_list,
-            gt_labels,
-            gt_bboxes,
-            mask_gt,
-            pred_bboxes.detach() * stride_tensor,
-        )
+        if not self.training:
+            target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
+                pred_scores.detach(),
+                pred_bboxes.detach() * stride_tensor,
+                anchor_points,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+            )
+        else:
+            target_labels, target_bboxes, target_scores, fg_mask = self.warmup_assigner(
+                anchors,
+                n_anchors_list,
+                gt_labels,
+                gt_bboxes,
+                mask_gt,
+                pred_bboxes.detach() * stride_tensor,
+            )
 
         # rescale bbox
         target_bboxes /= stride_tensor
