@@ -64,7 +64,7 @@ def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
         config.head_anchors = 1
         config.head_strides = [8, 16, 32, 64]
         config.iou_type = "giou"
-        config.atss_warmup_epoch = 0
+        config.atss_warmup_epoch = 4
         config.use_dfl = True
         config.reg_max = 16
 

@@ -1847,9 +1847,9 @@ class DetrImageProcessor(BaseImageProcessor):
             raise ValueError("return_coco_annotation and return_binary_maps can not be both set to True.")
 
         # [batch_size, num_queries, num_classes+1]
-        class_queries_logits = outputs.logits  
-        # [batch_size, num_queries, height, width]        
-        masks_queries_logits = outputs.pred_masks  
+        class_queries_logits = outputs.logits
+        # [batch_size, num_queries, height, width]
+        masks_queries_logits = outputs.pred_masks
 
         device = masks_queries_logits.device
         num_classes = class_queries_logits.shape[-1] - 1
@@ -1887,9 +1887,7 @@ class DetrImageProcessor(BaseImageProcessor):
             if target_sizes is not None:
                 size = target_sizes[i] if isinstance(target_sizes[i], tuple) else target_sizes[i].cpu().tolist()
                 segmentation = torch.zeros(size) - 1
-                pred_masks = torch.nn.functional.interpolate(
-                    pred_masks.unsqueeze(0), size=size, mode="nearest"
-                )[0]
+                pred_masks = torch.nn.functional.interpolate(pred_masks.unsqueeze(0), size=size, mode="nearest")[0]
 
             instance_maps, segments = [], []
             current_segment_id = 0

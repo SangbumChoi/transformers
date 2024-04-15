@@ -27,7 +27,7 @@ import torch.utils.checkpoint
 from torch import Tensor, nn
 
 from ...activations import ACT2FN
-from ...modeling_outputs import BackboneOutput, BaseModelOutputWithNoAttention
+from ...modeling_outputs import BaseModelOutputWithNoAttention
 from ...modeling_utils import PreTrainedModel
 from ...utils import (
     ModelOutput,
@@ -66,11 +66,6 @@ YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST = [
 
 
 @dataclass
-class Yolov6ModelOutput(BackboneOutput):
-    loss: Optional[torch.FloatTensor] = None
-
-
-@dataclass
 class Yolov6ObjectDetectionOutput(ModelOutput):
     """
     Output type of [`Yolov6ForObjectDetection`].
@@ -89,10 +84,6 @@ class Yolov6ObjectDetectionOutput(ModelOutput):
             values are normalized in [0, 1], relative to the size of each individual image in the batch (disregarding
             possible padding). You can use [`~YolosImageProcessor.post_process`] to retrieve the unnormalized bounding
             boxes.
-        auxiliary_outputs (`list[Dict]`, *optional*):
-            Optional, only returned when auxilary losses are activated (i.e. `config.auxiliary_loss` is set to `True`)
-            and labels are provided. It is a list of dictionaries containing the two above keys (`logits` and
-            `pred_boxes`) for each decoder layer.
         last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
             Sequence of hidden-states at the output of the last layer of the decoder of the model.
         hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
@@ -1086,7 +1077,7 @@ class Yolov6PreTrainedModel(PreTrainedModel):
             # cf https://github.com/pytorch/pytorch/pull/5617
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
-                module.bias.data.zero_()
+                module.bias.data.zero_()        
         elif isinstance(module, nn.LayerNorm):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
@@ -1549,7 +1540,6 @@ def df_loss(pred_dist, target, reg_max):
     return (loss_left + loss_right).mean(-1, keepdim=True)
 
 
-# Copied from transformers.models.detr.modeling_detr.DetrLoss with Detr->Yolos
 class Yolov6Loss(nn.Module):
     """
     This class computes the losses for Yolov6ForObjectDetection. The process happens in two steps: 1)
@@ -1565,14 +1555,22 @@ class Yolov6Loss(nn.Module):
 
 
     Args:
-        matcher (`YolosHungarianMatcher`):
-            Module able to compute a matching between targets and proposals.
         num_classes (`int`):
             Number of object categories, omitting the special no-object category.
-        eos_coef (`float`):
-            Relative classification weight applied to the no-object category.
+        warmup_epoch (`int`):
+            Warming up epoch to use either ATSSAssigner, or TaskAlignedAssigner. However, it is not used due to incompatibility.
+        use_dfl (`bool`):
+            Whether to use dfl_loss.
+        iou_type (`str`):
+            Different types of iou such as giou, ciou, diou.
+        fpn_strides (`List[int]`):
+            List of int to generate strides in feature pyramid network.
+        reg_max (`int`):
+            Max number of regression.
         losses (`List[str]`):
             List of all the losses to be applied. See `get_loss` for a list of all available losses.
+        training (`bool`):
+            Wheter it is training or inference stage.
     """
 
     def __init__(
@@ -1783,6 +1781,7 @@ class Yolov6Loss(nn.Module):
         outputs["anchor_points_s"] = anchor_points_s
         pred_bboxes = self.bbox_decode(anchor_points_s, pred_distri)  # xyxy
         outputs["pred_bboxes"] = pred_bboxes
+        # original implementation of assigner is using warmup_epoch
         if not self.training:
             target_labels, target_bboxes, target_scores, fg_mask = self.formal_assigner(
                 pred_scores.detach(),
