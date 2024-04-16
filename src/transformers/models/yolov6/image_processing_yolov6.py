@@ -1008,6 +1008,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         target_sizes: Union[TensorType, List[Tuple]] = None,
         nms_threshold: float = 0.65,
         max_nms: int = 30000,
+        num_nms: int = 300,
     ):
         """
         Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
@@ -1022,6 +1023,12 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             target_sizes (`torch.Tensor` or `List[Tuple[int, int]]`, *optional*):
                 Tensor of shape `(batch_size, 2)` or list of tuples (`Tuple[int, int]`) containing the target size
                 `(height, width)` of each image in the batch. If unset, predictions will not be resized.
+            nms_threshold (`float`, *optional*):
+                NMS score threshold to keep duplicated object detection predictions.
+            max_nms (`int`, *optional*):
+                Number of maximum output for intermediate results.
+            num_nms (`int`, *optional*):
+                Number of final output after the nms results.
         Returns:
             `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
             in the batch as predicted by the model.
@@ -1067,7 +1074,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 score = score[indices]
 
             # apply NMS
-            keep_inds = nms(box, score, nms_threshold)[:300]
+            keep_inds = nms(box, score, nms_threshold)[:num_nms]
             score = score[keep_inds]
             lbls = lbls[keep_inds]
             box = box[keep_inds]
