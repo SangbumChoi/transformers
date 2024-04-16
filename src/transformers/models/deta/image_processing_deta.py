@@ -1158,7 +1158,7 @@ class DetaImageProcessor(BaseImageProcessor):
             lbls = lbls[pre_topk]
 
             # apply NMS
-            keep_inds = batched_nms(box, score, lbls, nms_threshold)[:100]
+            keep_inds = batched_nms(box, score, lbls, nms_threshold)[:300]
             score = score[keep_inds]
             lbls = lbls[keep_inds]
             box = box[keep_inds]
