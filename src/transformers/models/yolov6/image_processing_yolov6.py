@@ -1008,7 +1008,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         target_sizes: Union[TensorType, List[Tuple]] = None,
         nms_threshold: float = 0.65,
         max_nms: int = 30000,
-        num_nms: int = 300,
+        num_nms: int = 100,
     ):
         """
         Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,

@@ -1096,6 +1096,7 @@ class DetaImageProcessor(BaseImageProcessor):
         threshold: float = 0.5,
         target_sizes: Union[TensorType, List[Tuple]] = None,
         nms_threshold: float = 0.7,
+        num_nms: int = 100,
     ):
         """
         Converts the output of [`DetaForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
@@ -1111,6 +1112,8 @@ class DetaImageProcessor(BaseImageProcessor):
                 (height, width) of each image in the batch. If left to None, predictions will not be resized.
             nms_threshold (`float`, *optional*, defaults to 0.7):
                 NMS threshold.
+            num_nms (`int`, *optional*, defaults to 100):
+                Number of objects threshold. 
 
         Returns:
             `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
@@ -1158,7 +1161,7 @@ class DetaImageProcessor(BaseImageProcessor):
             lbls = lbls[pre_topk]
 
             # apply NMS
-            keep_inds = batched_nms(box, score, lbls, nms_threshold)[:300]
+            keep_inds = batched_nms(box, score, lbls, nms_threshold)[:num_nms]
             score = score[keep_inds]
             lbls = lbls[keep_inds]
             box = box[keep_inds]
