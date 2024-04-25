@@ -1113,7 +1113,7 @@ class DetaImageProcessor(BaseImageProcessor):
             nms_threshold (`float`, *optional*, defaults to 0.7):
                 NMS threshold.
             num_nms (`int`, *optional*, defaults to 100):
-                Number of objects threshold. 
+                Number of objects threshold.
 
         Returns:
             `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
