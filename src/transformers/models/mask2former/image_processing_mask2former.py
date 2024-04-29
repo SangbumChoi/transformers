@@ -1121,10 +1121,6 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
             pred_scores = scores_per_image * mask_scores_per_image
             pred_classes = labels_per_image
 
-            mask_pred, pred_scores, pred_classes = remove_low_and_no_objects(
-                mask_pred, pred_scores, pred_classes, threshold, num_classes
-            )
-
             segmentation = torch.zeros((384, 384)) - 1
             if target_sizes is not None:
                 size = target_sizes[i] if isinstance(target_sizes[i], tuple) else target_sizes[i].cpu().tolist()
