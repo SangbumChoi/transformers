@@ -343,8 +343,8 @@ class Yolov6RepVGGBlock(nn.Module):
         if branch is None:
             return 0, 0
         if isinstance(branch, Yolov6ConvLayer):
-            kernel = branch.conv.weight
-            bias = branch.conv.bias
+            kernel = branch.convolution.weight
+            bias = branch.convolution.bias
             return kernel, bias
         elif isinstance(branch, nn.BatchNorm2d):
             if not hasattr(self, "id_tensor"):
@@ -368,13 +368,13 @@ class Yolov6RepVGGBlock(nn.Module):
             return
         kernel, bias = self.get_equivalent_kernel_bias()
         self.rbr_reparam = nn.Conv2d(
-            in_channels=self.rbr_dense.conv.in_channels,
-            out_channels=self.rbr_dense.conv.out_channels,
-            kernel_size=self.rbr_dense.conv.kernel_size,
-            stride=self.rbr_dense.conv.stride,
-            padding=self.rbr_dense.conv.padding,
-            dilation=self.rbr_dense.conv.dilation,
-            groups=self.rbr_dense.conv.groups,
+            in_channels=self.rbr_dense.convolution.in_channels,
+            out_channels=self.rbr_dense.convolution.out_channels,
+            kernel_size=self.rbr_dense.convolution.kernel_size,
+            stride=self.rbr_dense.convolution.stride,
+            padding=self.rbr_dense.convolution.padding,
+            dilation=self.rbr_dense.convolution.dilation,
+            groups=self.rbr_dense.convolution.groups,
             bias=True,
         )
         self.rbr_reparam.weight.data = kernel
