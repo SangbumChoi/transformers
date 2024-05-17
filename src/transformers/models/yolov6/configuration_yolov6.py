@@ -44,51 +44,34 @@ class Yolov6Config(PretrainedConfig):
     documentation from [`PretrainedConfig`] for more information.
 
     Args:
-        hidden_size (`int`, *optional*, defaults to 768):
-            Dimensionality of the encoder layers and the pooler layer.
-        num_hidden_layers (`int`, *optional*, defaults to 12):
-            Number of hidden layers in the Transformer encoder.
-        num_attention_heads (`int`, *optional*, defaults to 12):
-            Number of attention heads for each attention layer in the Transformer encoder.
-        intermediate_size (`int`, *optional*, defaults to 3072):
-            Dimensionality of the "intermediate" (i.e., feed-forward) layer in the Transformer encoder.
-        hidden_act (`str` or `function`, *optional*, defaults to `"gelu"`):
-            The non-linear activation function (function or string) in the encoder and pooler. If string, `"gelu"`,
-            `"relu"`, `"selu"` and `"gelu_new"` are supported.
-        hidden_dropout_prob (`float`, *optional*, defaults to 0.0):
-            The dropout probabilitiy for all fully connected layers in the embeddings, encoder, and pooler.
-        attention_probs_dropout_prob (`float`, *optional*, defaults to 0.0):
-            The dropout ratio for the attention probabilities.
+        in_channels (`<fill_type>`, *optional*, defaults to 3): <fill_docstring>
+        block_type (`<fill_type>`, *optional*, defaults to `"Yolov6RepVGGBlock"`): <fill_docstring>
+        backbone_num_repeats (`<fill_type>`, *optional*, defaults to `[1, 2, 4, 6, 2]`): <fill_docstring>
+        backbone_out_channels (`<fill_type>`, *optional*, defaults to `[16, 32, 64, 128, 256]`): <fill_docstring>
+        backbone_csp_e (`<fill_type>`, *optional*, defaults to 0.0): <fill_docstring>
+        backbone_fuse_P2 (`<fill_type>`, *optional*, defaults to `True`): <fill_docstring>
+        backbone_cspsppf (`<fill_type>`, *optional*, defaults to `True`): <fill_docstring>
+        backbone_stage_block_type (`<fill_type>`, *optional*, defaults to `"Yolov6RepBlock"`): <fill_docstring>
+        neck_num_repeats (`<fill_type>`, *optional*, defaults to `[4, 4, 4, 4]`): <fill_docstring>
+        neck_out_channels (`<fill_type>`, *optional*, defaults to `[64, 32, 32, 64, 64, 128]`): <fill_docstring>
+        neck_csp_e (`<fill_type>`, *optional*, defaults to 0.0): <fill_docstring>
+        neck_stage_block_type (`<fill_type>`, *optional*, defaults to `"Yolov6RepBlock"`): <fill_docstring>
+        head_in_channels (`<fill_type>`, *optional*, defaults to `[128, 256, 512]`): <fill_docstring>
+        head_num_layers (`<fill_type>`, *optional*, defaults to 3): <fill_docstring>
+        head_anchors (`<fill_type>`, *optional*, defaults to 3): <fill_docstring>
+        head_strides (`<fill_type>`, *optional*, defaults to `[8, 16, 32]`): <fill_docstring>
+        atss_warmup_epoch (`<fill_type>`, *optional*, defaults to 0): <fill_docstring>
+        iou_type (`<fill_type>`, *optional*, defaults to `"siou"`): <fill_docstring>
+        use_dfl (`<fill_type>`, *optional*, defaults to `False`): <fill_docstring>
+        reg_max (`<fill_type>`, *optional*, defaults to 0): <fill_docstring>
+        reg_max_proj (`<fill_type>`, *optional*, defaults to 16): <fill_docstring>
+        class_loss_coefficient (`<fill_type>`, *optional*, defaults to 1.0): <fill_docstring>
+        iou_loss_coefficient (`<fill_type>`, *optional*, defaults to 2.5): <fill_docstring>
+        dfl_loss_coefficient (`<fill_type>`, *optional*, defaults to 0.5): <fill_docstring>
         initializer_range (`float`, *optional*, defaults to 0.02):
             The standard deviation of the truncated_normal_initializer for initializing all weight matrices.
-        layer_norm_eps (`float`, *optional*, defaults to 1e-12):
-            The epsilon used by the layer normalization layers.
-        image_size (`List[int]`, *optional*, defaults to `[512, 864]`):
-            The size (resolution) of each image.
-        patch_size (`int`, *optional*, defaults to 16):
-            The size (resolution) of each patch.
-        num_channels (`int`, *optional*, defaults to 3):
-            The number of input channels.
-        qkv_bias (`bool`, *optional*, defaults to `True`):
-            Whether to add a bias to the queries, keys and values.
-        num_detection_tokens (`int`, *optional*, defaults to 100):
-            The number of detection tokens.
-        use_mid_position_embeddings (`bool`, *optional*, defaults to `True`):
-            Whether to use the mid-layer position encodings.
-        auxiliary_loss (`bool`, *optional*, defaults to `False`):
-            Whether auxiliary decoding losses (loss at each decoder layer) are to be used.
-        class_cost (`float`, *optional*, defaults to 1):
-            Relative weight of the classification error in the Hungarian matching cost.
-        bbox_cost (`float`, *optional*, defaults to 5):
-            Relative weight of the L1 error of the bounding box coordinates in the Hungarian matching cost.
-        giou_cost (`float`, *optional*, defaults to 2):
-            Relative weight of the generalized IoU loss of the bounding box in the Hungarian matching cost.
-        bbox_loss_coefficient (`float`, *optional*, defaults to 5):
-            Relative weight of the L1 bounding box loss in the object detection loss.
-        giou_loss_coefficient (`float`, *optional*, defaults to 2):
-            Relative weight of the generalized IoU loss in the object detection loss.
-        eos_coefficient (`float`, *optional*, defaults to 0.1):
-            Relative classification weight of the 'no-object' class in the object detection loss.
+        forward_fuse (`<fill_type>`, *optional*, defaults to `False`): <fill_docstring>
+        export (`<fill_type>`, *optional*, defaults to `False`): <fill_docstring>
 
     Example:
 

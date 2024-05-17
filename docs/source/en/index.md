@@ -337,6 +337,7 @@ Flax), PyTorch, and/or TensorFlow.
 |                         [XLS-R](model_doc/xls_r)                         |       ✅        |         ✅         |      ✅      |
 |                 [XLSR-Wav2Vec2](model_doc/xlsr_wav2vec2)                 |       ✅        |         ✅         |      ✅      |
 |                         [YOLOS](model_doc/yolos)                         |       ✅        |         ❌         |      ❌      |
+|                        [YOLOV6](model_doc/yolov6)                        |       ✅        |         ❌         |      ❌      |
 |                          [YOSO](model_doc/yoso)                          |       ✅        |         ❌         |      ❌      |
 
 <!-- End table-->

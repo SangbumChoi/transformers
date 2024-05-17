@@ -29,6 +29,7 @@ from ...image_transforms import (
     pad,
     rescale,
     resize,
+    rgb_to_id,
     to_channel_dimension_format,
 )
 from ...image_utils import (
@@ -64,8 +65,9 @@ if is_torch_available():
 if is_torchvision_available():
     from torchvision.ops import nms
 
+
 if is_vision_available():
-    pass
+    import PIL
 
 
 if is_scipy_available():
@@ -213,7 +215,7 @@ def make_pixel_mask(
 
 
 # Copied from transformers.models.detr.image_processing_detr.convert_coco_poly_to_mask
-def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndarray:
+def convert_coco_poly_to_mask(segmentations, height: int, width: int, segmentation_type: str) -> np.ndarray:
     """
     Convert a COCO polygon annotation to a mask.
 
@@ -224,6 +226,8 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
             Height of the mask.
         width (`int`):
             Width of the mask.
+        segmentation_type (`str`):
+            Type of segmentation.
     """
     try:
         from pycocotools import mask as coco_mask
@@ -232,7 +236,10 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
 
     masks = []
     for polygons in segmentations:
-        rles = coco_mask.frPyObjects(polygons, height, width)
+        if segmentation_type == "polygon":
+            rles = coco_mask.frPyObjects(polygons, height, width)
+        if segmentation_type == "rle":
+            rles = polygons
         mask = coco_mask.decode(rles)
         if len(mask.shape) < 3:
             mask = mask[..., None]
@@ -251,6 +258,7 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
 def prepare_coco_detection_annotation(
     image,
     target,
+    segmentation_type: str = "polygon",
     return_segmentation_masks: bool = False,
     input_data_format: Optional[Union[ChannelDimension, str]] = None,
 ):
@@ -302,8 +310,84 @@ def prepare_coco_detection_annotation(
 
     if return_segmentation_masks:
         segmentation_masks = [obj["segmentation"] for obj in annotations]
-        masks = convert_coco_poly_to_mask(segmentation_masks, image_height, image_width)
+        masks = convert_coco_poly_to_mask(segmentation_masks, image_height, image_width, segmentation_type)
         new_target["masks"] = masks[keep]
+
+    return new_target
+
+
+def masks_to_boxes(masks: np.ndarray) -> np.ndarray:
+    """
+    Compute the bounding boxes around the provided panoptic segmentation masks.
+
+    Args:
+        masks: masks in format `[number_masks, height, width]` where N is the number of masks
+
+    Returns:
+        boxes: bounding boxes in format `[number_masks, 4]` in xyxy format
+    """
+    if masks.size == 0:
+        return np.zeros((0, 4))
+
+    h, w = masks.shape[-2:]
+    y = np.arange(0, h, dtype=np.float32)
+    x = np.arange(0, w, dtype=np.float32)
+    # see https://github.com/pytorch/pytorch/issues/50276
+    y, x = np.meshgrid(y, x, indexing="ij")
+
+    x_mask = masks * np.expand_dims(x, axis=0)
+    x_max = x_mask.reshape(x_mask.shape[0], -1).max(-1)
+    x = np.ma.array(x_mask, mask=~(np.array(masks, dtype=bool)))
+    x_min = x.filled(fill_value=1e8)
+    x_min = x_min.reshape(x_min.shape[0], -1).min(-1)
+
+    y_mask = masks * np.expand_dims(y, axis=0)
+    y_max = y_mask.reshape(x_mask.shape[0], -1).max(-1)
+    y = np.ma.array(y_mask, mask=~(np.array(masks, dtype=bool)))
+    y_min = y.filled(fill_value=1e8)
+    y_min = y_min.reshape(y_min.shape[0], -1).min(-1)
+
+    return np.stack([x_min, y_min, x_max, y_max], 1)
+
+
+# Copied from transformers.models.detr.image_processing_detr.prepare_coco_panoptic_annotation
+def prepare_coco_panoptic_annotation(
+    image: np.ndarray,
+    target: Dict,
+    masks_path: Union[str, pathlib.Path],
+    return_masks: bool = True,
+    input_data_format: Union[ChannelDimension, str] = None,
+) -> Dict:
+    """
+    Prepare a coco panoptic annotation for DETR.
+    """
+    image_height, image_width = get_image_size(image, channel_dim=input_data_format)
+    annotation_path = pathlib.Path(masks_path) / target["file_name"]
+
+    new_target = {}
+    new_target["image_id"] = np.asarray([target["image_id"] if "image_id" in target else target["id"]], dtype=np.int64)
+    new_target["size"] = np.asarray([image_height, image_width], dtype=np.int64)
+    new_target["orig_size"] = np.asarray([image_height, image_width], dtype=np.int64)
+
+    if "segments_info" in target:
+        masks = np.asarray(PIL.Image.open(annotation_path), dtype=np.uint32)
+        masks = rgb_to_id(masks)
+
+        ids = np.array([segment_info["id"] for segment_info in target["segments_info"]])
+        masks = masks == ids[:, None, None]
+        masks = masks.astype(np.uint8)
+        if return_masks:
+            new_target["masks"] = masks
+        new_target["boxes"] = masks_to_boxes(masks)
+        new_target["class_labels"] = np.array(
+            [segment_info["category_id"] for segment_info in target["segments_info"]], dtype=np.int64
+        )
+        new_target["iscrowd"] = np.asarray(
+            [segment_info["iscrowd"] for segment_info in target["segments_info"]], dtype=np.int64
+        )
+        new_target["area"] = np.asarray(
+            [segment_info["area"] for segment_info in target["segments_info"]], dtype=np.float32
+        )
 
     return new_target
 
@@ -379,7 +463,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
     Constructs a Detr image processor.
 
     Args:
-        format (`str`, *optional*, defaults to `"coco_detection"`):
+        format (`str`, *optional*, defaults to `AnnotationFormat.COCO_DETECTION`):
             Data format of the annotations. One of "coco_detection" or "coco_panoptic".
         do_resize (`bool`, *optional*, defaults to `True`):
             Controls whether to resize the image's (height, width) dimensions to the specified `size`. Can be
@@ -395,15 +479,16 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         rescale_factor (`int` or `float`, *optional*, defaults to `1/255`):
             Scale factor to use if rescaling the image. Can be overridden by the `rescale_factor` parameter in the
             `preprocess` method.
-        do_normalize:
             Controls whether to normalize the image. Can be overridden by the `do_normalize` parameter in the
             `preprocess` method.
+        do_normalize (`bool`, *optional*, defaults to `False`): <fill_docstring>
         image_mean (`float` or `List[float]`, *optional*, defaults to `IMAGENET_DEFAULT_MEAN`):
             Mean values to use when normalizing the image. Can be a single value or a list of values, one for each
             channel. Can be overridden by the `image_mean` parameter in the `preprocess` method.
         image_std (`float` or `List[float]`, *optional*, defaults to `IMAGENET_DEFAULT_STD`):
             Standard deviation values to use when normalizing the image. Can be a single value or a list of values, one
             for each channel. Can be overridden by the `image_std` parameter in the `preprocess` method.
+        do_convert_annotations (`Optional`, *optional*): <fill_docstring>
         do_pad (`bool`, *optional*, defaults to `True`):
             Controls whether to pad the image to the largest image in a batch and create a pixel mask. Can be
             overridden by the `do_pad` parameter in the `preprocess` method.
@@ -479,6 +564,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         image: np.ndarray,
         target: Dict,
         format: Optional[AnnotationFormat] = None,
+        segmentation_type: str = "",
         return_segmentation_masks: bool = None,
         masks_path: Optional[Union[str, pathlib.Path]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
@@ -491,7 +577,16 @@ class Yolov6ImageProcessor(BaseImageProcessor):
         if format == AnnotationFormat.COCO_DETECTION:
             return_segmentation_masks = False if return_segmentation_masks is None else return_segmentation_masks
             target = prepare_coco_detection_annotation(
-                image, target, return_segmentation_masks, input_data_format=input_data_format
+                image, target, segmentation_type, return_segmentation_masks, input_data_format=input_data_format
+            )
+        elif format == AnnotationFormat.COCO_PANOPTIC:
+            return_segmentation_masks = True if return_segmentation_masks is None else return_segmentation_masks
+            target = prepare_coco_panoptic_annotation(
+                image,
+                target,
+                masks_path=masks_path,
+                return_masks=return_segmentation_masks,
+                input_data_format=input_data_format,
             )
         else:
             raise ValueError(f"Format {format} is not supported.")
@@ -560,8 +655,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
                 "Size must contain 'height' and 'width' keys or 'shortest_edge' and 'longest_edge' keys. Got"
                 f" {size.keys()}."
             )
-        size = check_img_size(size)
-
         image = resize(
             image, size=size, resample=resample, data_format=data_format, input_data_format=input_data_format, **kwargs
         )
@@ -614,7 +707,7 @@ class Yolov6ImageProcessor(BaseImageProcessor):
     def normalize_annotation(self, annotation: Dict, image_size: Tuple[int, int]) -> Dict:
         """
         Normalize the boxes in the annotation from `[top_left_x, top_left_y, bottom_right_x, bottom_right_y]` to
-        `[center_x, center_y, width, height]` format.
+        `[center_x, center_y, width, height]` format and from absolute to relative pixel values.
         """
         return normalize_annotation(annotation, image_size=image_size)
 

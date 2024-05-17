@@ -244,7 +244,7 @@ def make_pixel_mask(
 
 
 # Copied from transformers.models.detr.image_processing_detr.convert_coco_poly_to_mask
-def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndarray:
+def convert_coco_poly_to_mask(segmentations, height: int, width: int, segmentation_type: str) -> np.ndarray:
     """
     Convert a COCO polygon annotation to a mask.
 
@@ -255,6 +255,8 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
             Height of the mask.
         width (`int`):
             Width of the mask.
+        segmentation_type (`str`):
+            Type of segmentation.
     """
     try:
         from pycocotools import mask as coco_mask
@@ -263,7 +265,10 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
 
     masks = []
     for polygons in segmentations:
-        rles = coco_mask.frPyObjects(polygons, height, width)
+        if segmentation_type == "polygon":
+            rles = coco_mask.frPyObjects(polygons, height, width)
+        if segmentation_type == "rle":
+            rles = polygons
         mask = coco_mask.decode(rles)
         if len(mask.shape) < 3:
             mask = mask[..., None]
@@ -282,6 +287,7 @@ def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndar
 def prepare_coco_detection_annotation(
     image,
     target,
+    segmentation_type: str = "polygon",
     return_segmentation_masks: bool = False,
     input_data_format: Optional[Union[ChannelDimension, str]] = None,
 ):
@@ -333,7 +339,7 @@ def prepare_coco_detection_annotation(
 
     if return_segmentation_masks:
         segmentation_masks = [obj["segmentation"] for obj in annotations]
-        masks = convert_coco_poly_to_mask(segmentation_masks, image_height, image_width)
+        masks = convert_coco_poly_to_mask(segmentation_masks, image_height, image_width, segmentation_type)
         new_target["masks"] = masks[keep]
 
     return new_target
@@ -793,6 +799,7 @@ class YolosImageProcessor(BaseImageProcessor):
         image: np.ndarray,
         target: Dict,
         format: Optional[AnnotationFormat] = None,
+        segmentation_type: str = "",
         return_segmentation_masks: bool = None,
         masks_path: Optional[Union[str, pathlib.Path]] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
@@ -805,7 +812,7 @@ class YolosImageProcessor(BaseImageProcessor):
         if format == AnnotationFormat.COCO_DETECTION:
             return_segmentation_masks = False if return_segmentation_masks is None else return_segmentation_masks
             target = prepare_coco_detection_annotation(
-                image, target, return_segmentation_masks, input_data_format=input_data_format
+                image, target, segmentation_type, return_segmentation_masks, input_data_format=input_data_format
             )
         elif format == AnnotationFormat.COCO_PANOPTIC:
             return_segmentation_masks = True if return_segmentation_masks is None else return_segmentation_masks
