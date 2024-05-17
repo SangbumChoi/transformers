@@ -1383,7 +1383,7 @@ else:
     _import_structure["models.vitmatte"].append("VitMatteImageProcessor")
     _import_structure["models.vivit"].append("VivitImageProcessor")
     _import_structure["models.yolos"].extend(["YolosFeatureExtractor", "YolosImageProcessor"])
-    _import_structure["models.yolov6"].extend(["Yolov6FeatureExtractor", "Yolov6ImageProcessor"])
+    _import_structure["models.yolov6"].extend(["Yolov6ImageProcessor"])
 
 
 # PyTorch-backed objects
@@ -6352,7 +6352,7 @@ if TYPE_CHECKING:
         from .models.vitmatte import VitMatteImageProcessor
         from .models.vivit import VivitImageProcessor
         from .models.yolos import YolosFeatureExtractor, YolosImageProcessor
-        from .models.yolov6 import Yolov6FeatureExtractor, Yolov6ImageProcessor
+        from .models.yolov6 import Yolov6ImageProcessor
 
     # Modeling
     try:
