@@ -59,12 +59,6 @@ logger = logging.get_logger(__name__)
 _CHECKPOINT_FOR_DOC = "microsoft/Phi-3-mini-4k-instruct"
 _CONFIG_FOR_DOC = "Phi3Config"
 
-PHI3_PRETRAINED_MODEL_ARCHIVE_LIST = [
-    "microsoft/Phi-3-mini-4k-instruct",
-    "microsoft/Phi-3-mini-128k-instruct",
-    # See all Phi-3 models at https://huggingface.co/models?filter=Phi-3
-]
-
 
 # Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Phi3
 class Phi3RMSNorm(nn.Module):
@@ -105,15 +99,14 @@ class Phi3RotaryEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        self.register_buffer("inv_freq", None, persistent=False)
+
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float() / self.dim))
+        self.register_buffer("inv_freq", tensor=inv_freq, persistent=False)
 
     @torch.no_grad()
     def forward(self, x, position_ids, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
-        if self.inv_freq is None:
-            self.inv_freq = 1.0 / (
-                self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64, device=x.device).float() / self.dim)
-            )
+        self.inv_freq.to(x.device)
         inv_freq_expanded = self.inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         position_ids_expanded = position_ids[:, None, :].float()
         # Force float32 since bfloat16 loses precision on long contexts
