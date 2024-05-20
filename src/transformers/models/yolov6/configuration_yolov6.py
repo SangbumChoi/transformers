@@ -88,7 +88,7 @@ class Yolov6Config(PretrainedConfig):
     >>> configuration = model.config
     ```"""
 
-    model_type = "yolov6n"
+    model_type = "yolov6"
 
     def __init__(
         self,
