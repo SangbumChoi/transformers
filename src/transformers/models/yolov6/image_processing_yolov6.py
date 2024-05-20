@@ -592,21 +592,6 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             raise ValueError(f"Format {format} is not supported.")
         return target
 
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.prepare
-    def prepare(self, image, target, return_segmentation_masks=None, masks_path=None):
-        logger.warning_once(
-            "The `prepare` method is deprecated and will be removed in a v4.33. "
-            "Please use `prepare_annotation` instead. Note: the `prepare_annotation` method "
-            "does not return the image anymore.",
-        )
-        target = self.prepare_annotation(image, target, return_segmentation_masks, masks_path, self.format)
-        return image, target
-
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.prepare_coco_detection with DETR->Yolos
-    def prepare_coco_detection(self, *args, **kwargs):
-        logger.warning_once("The `prepare_coco_detection` method is deprecated and will be removed in v4.33. ")
-        return prepare_coco_detection_annotation(*args, **kwargs)
-
     # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.resize
     def resize(
         self,
@@ -625,8 +610,15 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             image (`np.ndarray`):
                 Image to resize.
             size (`Dict[str, int]`):
-                Dictionary containing the size to resize to. Can contain the keys `shortest_edge` and `longest_edge` or
-                `height` and `width`.
+                Size of the image's `(height, width)` dimensions after resizing. Available options are:
+                    - `{"height": int, "width": int}`: The image will be resized to the exact size `(height, width)`.
+                        Do NOT keep the aspect ratio.
+                    - `{"shortest_edge": int, "longest_edge": int}`: The image will be resized to a maximum size respecting
+                        the aspect ratio and keeping the shortest edge less or equal to `shortest_edge` and the longest edge
+                        less or equal to `longest_edge`.
+                    - `{"max_height": int, "max_width": int}`: The image will be resized to the maximum size respecting the
+                        aspect ratio and keeping the height less or equal to `max_height` and the width less or equal to
+                        `max_width`.
             resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BILINEAR`):
                 Resampling filter to use if resizing the image.
             data_format (`str` or `ChannelDimension`, *optional*):
@@ -645,18 +637,27 @@ class Yolov6ImageProcessor(BaseImageProcessor):
             max_size = None
         size = get_size_dict(size, max_size=max_size, default_to_square=False)
         if "shortest_edge" in size and "longest_edge" in size:
-            size = get_resize_output_image_size(
+            new_size = get_resize_output_image_size(
                 image, size["shortest_edge"], size["longest_edge"], input_data_format=input_data_format
             )
+        elif "max_height" in size and "max_width" in size:
+            new_size = get_image_size_for_max_height_width(
+                image, size["max_height"], size["max_width"], input_data_format=input_data_format
+            )
         elif "height" in size and "width" in size:
-            size = (size["height"], size["width"])
+            new_size = (size["height"], size["width"])
         else:
             raise ValueError(
                 "Size must contain 'height' and 'width' keys or 'shortest_edge' and 'longest_edge' keys. Got"
                 f" {size.keys()}."
             )
         image = resize(
-            image, size=size, resample=resample, data_format=data_format, input_data_format=input_data_format, **kwargs
+            image,
+            size=new_size,
+            resample=resample,
+            data_format=data_format,
+            input_data_format=input_data_format,
+            **kwargs,
         )
         return image
 
