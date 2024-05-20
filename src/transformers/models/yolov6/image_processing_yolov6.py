@@ -115,18 +115,55 @@ def get_size_with_aspect_ratio(image_size, size, max_size=None) -> Tuple[int, in
         min_original_size = float(min((height, width)))
         max_original_size = float(max((height, width)))
         if max_original_size / min_original_size * size > max_size:
-            size = int(round(max_size * min_original_size / max_original_size))
+            raw_size = max_size * min_original_size / max_original_size
+            size = int(round(raw_size))
 
     if (height <= width and height == size) or (width <= height and width == size):
         return height, width
 
     if width < height:
         ow = size
-        oh = int(size * height / width)
+        oh = int(size * height / width) if max_size is None else int(raw_size * height / width)
     else:
         oh = size
-        ow = int(size * width / height)
+        ow = int(size * width / height) if max_size is None else int(raw_size * height / width)
     return (oh, ow)
+
+
+# Copied from transformers.models.detr.image_processing_detr.get_image_size_for_max_height_width
+def get_image_size_for_max_height_width(
+    input_image: np.ndarray,
+    max_height: int,
+    max_width: int,
+    input_data_format: Optional[Union[str, ChannelDimension]] = None,
+) -> Tuple[int, int]:
+    """
+    Computes the output image size given the input image and the maximum allowed height and width. Keep aspect ratio.
+    Important, even if image_height < max_height and image_width < max_width, the image will be resized
+    to at least one of the edges be equal to max_height or max_width.
+
+    For example:
+        - input_size: (100, 200), max_height: 50, max_width: 50 -> output_size: (25, 50)
+        - input_size: (100, 200), max_height: 200, max_width: 500 -> output_size: (200, 400)
+
+    Args:
+        input_image (`np.ndarray`):
+            The image to resize.
+        max_height (`int`):
+            The maximum allowed height.
+        max_width (`int`):
+            The maximum allowed width.
+        input_data_format (`ChannelDimension` or `str`, *optional*):
+            The channel dimension format of the input image. If not provided, it will be inferred from the input image.
+    """
+    image_size = get_image_size(input_image, input_data_format)
+    height, width = image_size
+    height_scale = max_height / height
+    width_scale = max_width / width
+    min_scale = min(height_scale, width_scale)
+    new_height = int(height * min_scale)
+    new_width = int(width * min_scale)
+    return new_height, new_width
 
 
 # Copied from transformers.models.detr.image_processing_detr.get_resize_output_image_size
