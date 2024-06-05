@@ -794,6 +794,7 @@ _import_structure = {
     "models.xlnet": ["XLNetConfig"],
     "models.xmod": ["XmodConfig"],
     "models.yolos": ["YolosConfig"],
+    "models.yolov6": ["Yolov6Config"],
     "models.yoso": ["YosoConfig"],
     "onnx": [],
     "pipelines": [
@@ -1168,6 +1169,7 @@ else:
     _import_structure["models.vitmatte"].append("VitMatteImageProcessor")
     _import_structure["models.vivit"].append("VivitImageProcessor")
     _import_structure["models.yolos"].extend(["YolosFeatureExtractor", "YolosImageProcessor"])
+    _import_structure["models.yolov6"].extend(["Yolov6ImageProcessor"])
 
 
 # PyTorch-backed objects
@@ -3515,6 +3517,14 @@ else:
             "YolosPreTrainedModel",
         ]
     )
+    _import_structure["models.yolov6"].extend(
+        [
+            "YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST",
+            "Yolov6ForObjectDetection",
+            "Yolov6Model",
+            "Yolov6PreTrainedModel",
+        ]
+    )
     _import_structure["models.yoso"].extend(
         [
             "YosoForMaskedLM",
@@ -5796,6 +5806,7 @@ if TYPE_CHECKING:
         from .models.vitmatte import VitMatteImageProcessor
         from .models.vivit import VivitImageProcessor
         from .models.yolos import YolosFeatureExtractor, YolosImageProcessor
+        from .models.yolov6 import Yolov6ImageProcessor
 
     # Modeling
     try:
@@ -7677,6 +7688,12 @@ if TYPE_CHECKING:
             YolosForObjectDetection,
             YolosModel,
             YolosPreTrainedModel,
+        )
+        from .models.yolov6 import (
+            YOLOV6_PRETRAINED_MODEL_ARCHIVE_LIST,
+            Yolov6ForObjectDetection,
+            Yolov6Model,
+            Yolov6PreTrainedModel,
         )
         from .models.yoso import (
             YosoForMaskedLM,

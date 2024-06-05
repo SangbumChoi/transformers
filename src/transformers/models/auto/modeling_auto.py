@@ -264,6 +264,7 @@ MODEL_MAPPING_NAMES = OrderedDict(
         ("xlnet", "XLNetModel"),
         ("xmod", "XmodModel"),
         ("yolos", "YolosModel"),
+        ("yolov6", "Yolov6Model"),
         ("yoso", "YosoModel"),
     ]
 )
@@ -560,6 +561,7 @@ MODEL_FOR_IMAGE_MAPPING_NAMES = OrderedDict(
         ("vitdet", "VitDetModel"),
         ("vivit", "VivitModel"),
         ("yolos", "YolosModel"),
+        ("yolov6", "Yolov6Model"),
     ]
 )
 
@@ -767,6 +769,7 @@ MODEL_FOR_OBJECT_DETECTION_MAPPING_NAMES = OrderedDict(
         ("detr", "DetrForObjectDetection"),
         ("table-transformer", "TableTransformerForObjectDetection"),
         ("yolos", "YolosForObjectDetection"),
+        ("yolov6", "Yolov6ForObjectDetection"),
     ]
 )
 

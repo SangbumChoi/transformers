@@ -14,8 +14,9 @@
 # limitations under the License.
 """Image processor class for YOLOS."""
 
+import math
 import pathlib
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -25,7 +26,6 @@ from ...image_transforms import (
     PaddingMode,
     center_to_corners_format,
     corners_to_center_format,
-    id_to_rgb,
     pad,
     rescale,
     resize,
@@ -47,18 +47,12 @@ from ...image_utils import (
     to_numpy_array,
     valid_images,
     validate_annotations,
-    validate_kwargs,
-    validate_preprocess_arguments,
 )
 from ...utils import (
     TensorType,
-    is_flax_available,
-    is_jax_tensor,
     is_scipy_available,
-    is_tf_available,
-    is_tf_tensor,
     is_torch_available,
-    is_torch_tensor,
+    is_torchvision_available,
     is_vision_available,
     logging,
 )
@@ -66,7 +60,10 @@ from ...utils import (
 
 if is_torch_available():
     import torch
-    from torch import nn
+
+
+if is_torchvision_available():
+    from torchvision.ops import nms
 
 
 if is_vision_available():
@@ -74,8 +71,7 @@ if is_vision_available():
 
 
 if is_scipy_available():
-    import scipy.special
-    import scipy.stats
+    pass
 
 logger = logging.get_logger(__name__)
 
@@ -101,10 +97,9 @@ def get_max_height_width(
     return (max_height, max_width)
 
 
-def get_size_with_aspect_ratio(image_size, size, max_size=None) -> Tuple[int, int]:
+def get_size_with_aspect_ratio(image_size, size, max_size=None, mod_size=32) -> Tuple[int, int]:
     """
-    Computes the output image size given the input image size and the desired output size.
-
+    Computes the output image size given the input image size and the desired output size with multiple of divisible_size.
     Args:
         image_size (`Tuple[int, int]`):
             The input image size.
@@ -112,25 +107,40 @@ def get_size_with_aspect_ratio(image_size, size, max_size=None) -> Tuple[int, in
             The desired output size.
         max_size (`int`, *optional*):
             The maximum allowed output size.
+        mod_size (`int`, *optional*):
+            The size to make multiple of mod_size.
     """
     height, width = image_size
+    raw_size = None
     if max_size is not None:
         min_original_size = float(min((height, width)))
         max_original_size = float(max((height, width)))
         if max_original_size / min_original_size * size > max_size:
-            size = int(round(max_size * min_original_size / max_original_size))
+            raw_size = max_size * min_original_size / max_original_size
+            size = int(round(raw_size))
 
-    if width <= height and width != size:
-        height = int(size * height / width)
-        width = size
-    elif height < width and height != size:
-        width = int(size * width / height)
-        height = size
-    width_mod = np.mod(width, 16)
-    height_mod = np.mod(height, 16)
-    width = width - width_mod
-    height = height - height_mod
-    return (height, width)
+    if width < height:
+        ow = size
+        if max_size is not None and raw_size is not None:
+            oh = int(raw_size * height / width)
+        else:
+            oh = int(size * height / width)
+    elif (height <= width and height == size) or (width <= height and width == size):
+        oh, ow = height, width
+    else:
+        oh = size
+        if max_size is not None and raw_size is not None:
+            ow = int(raw_size * width / height)
+        else:
+            ow = int(size * width / height)
+
+    if mod_size is not None:
+        ow_mod = np.mod(ow, mod_size)
+        oh_mod = np.mod(oh, mod_size)
+        ow = ow - ow_mod
+        oh = oh - oh_mod
+
+    return (oh, ow)
 
 
 # Copied from transformers.models.detr.image_processing_detr.get_image_size_for_max_height_width
@@ -196,31 +206,6 @@ def get_resize_output_image_size(
         return size
 
     return get_size_with_aspect_ratio(image_size, size, max_size)
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_numpy_to_framework_fn
-def get_numpy_to_framework_fn(arr) -> Callable:
-    """
-    Returns a function that converts a numpy array to the framework of the input array.
-
-    Args:
-        arr (`np.ndarray`): The array to convert.
-    """
-    if isinstance(arr, np.ndarray):
-        return np.array
-    if is_tf_available() and is_tf_tensor(arr):
-        import tensorflow as tf
-
-        return tf.convert_to_tensor
-    if is_torch_available() and is_torch_tensor(arr):
-        import torch
-
-        return torch.tensor
-    if is_flax_available() and is_jax_tensor(arr):
-        import jax.numpy as jnp
-
-        return jnp.array
-    raise ValueError(f"Cannot convert arrays of type {type(arr)}")
 
 
 # Copied from transformers.models.detr.image_processing_detr.safe_squeeze
@@ -381,7 +366,6 @@ def prepare_coco_detection_annotation(
     return new_target
 
 
-# Copied from transformers.models.detr.image_processing_detr.masks_to_boxes
 def masks_to_boxes(masks: np.ndarray) -> np.ndarray:
     """
     Compute the bounding boxes around the provided panoptic segmentation masks.
@@ -416,7 +400,7 @@ def masks_to_boxes(masks: np.ndarray) -> np.ndarray:
     return np.stack([x_min, y_min, x_max, y_max], 1)
 
 
-# Copied from transformers.models.detr.image_processing_detr.prepare_coco_panoptic_annotation with DETR->YOLOS
+# Copied from transformers.models.detr.image_processing_detr.prepare_coco_panoptic_annotation
 def prepare_coco_panoptic_annotation(
     image: np.ndarray,
     target: Dict,
@@ -425,7 +409,7 @@ def prepare_coco_panoptic_annotation(
     input_data_format: Union[ChannelDimension, str] = None,
 ) -> Dict:
     """
-    Prepare a coco panoptic annotation for YOLOS.
+    Prepare a coco panoptic annotation for DETR.
     """
     image_height, image_width = get_image_size(image, channel_dim=input_data_format)
     annotation_path = pathlib.Path(masks_path) / target["file_name"]
@@ -456,51 +440,6 @@ def prepare_coco_panoptic_annotation(
         )
 
     return new_target
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_segmentation_image
-def get_segmentation_image(
-    masks: np.ndarray, input_size: Tuple, target_size: Tuple, stuff_equiv_classes, deduplicate=False
-):
-    h, w = input_size
-    final_h, final_w = target_size
-
-    m_id = scipy.special.softmax(masks.transpose(0, 1), -1)
-
-    if m_id.shape[-1] == 0:
-        # We didn't detect any mask :(
-        m_id = np.zeros((h, w), dtype=np.int64)
-    else:
-        m_id = m_id.argmax(-1).reshape(h, w)
-
-    if deduplicate:
-        # Merge the masks corresponding to the same stuff class
-        for equiv in stuff_equiv_classes.values():
-            for eq_id in equiv:
-                m_id[m_id == eq_id] = equiv[0]
-
-    seg_img = id_to_rgb(m_id)
-    seg_img = resize(seg_img, (final_w, final_h), resample=PILImageResampling.NEAREST)
-    return seg_img
-
-
-# Copied from transformers.models.detr.image_processing_detr.get_mask_area
-def get_mask_area(seg_img: np.ndarray, target_size: Tuple[int, int], n_classes: int) -> np.ndarray:
-    final_h, final_w = target_size
-    np_seg_img = seg_img.astype(np.uint8)
-    np_seg_img = np_seg_img.reshape(final_h, final_w, 3)
-    m_id = rgb_to_id(np_seg_img)
-    area = [(m_id == i).sum() for i in range(n_classes)]
-    return area
-
-
-# Copied from transformers.models.detr.image_processing_detr.score_labels_from_class_probabilities
-def score_labels_from_class_probabilities(logits: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    probs = scipy.special.softmax(logits, axis=-1)
-    labels = probs.argmax(-1, keepdims=True)
-    scores = np.take_along_axis(probs, labels, axis=-1)
-    scores, labels = scores.squeeze(-1), labels.squeeze(-1)
-    return scores, labels
 
 
 # Copied from transformers.models.detr.image_processing_detr.resize_annotation
@@ -555,181 +494,33 @@ def resize_annotation(
     return new_annotation
 
 
-# Copied from transformers.models.detr.image_processing_detr.binary_mask_to_rle
-def binary_mask_to_rle(mask):
-    """
-    Converts given binary mask of shape `(height, width)` to the run-length encoding (RLE) format.
-
-    Args:
-        mask (`torch.Tensor` or `numpy.array`):
-            A binary mask tensor of shape `(height, width)` where 0 denotes background and 1 denotes the target
-            segment_id or class_id.
-    Returns:
-        `List`: Run-length encoded list of the binary mask. Refer to COCO API for more information about the RLE
-        format.
-    """
-    if is_torch_tensor(mask):
-        mask = mask.numpy()
-
-    pixels = mask.flatten()
-    pixels = np.concatenate([[0], pixels, [0]])
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
-    runs[1::2] -= runs[::2]
-    return list(runs)
+def make_divisible(x, divisor):
+    # Returns x rounded up to the nearest multiple of divisor
+    return math.ceil(x / divisor) * divisor
 
 
-# Copied from transformers.models.detr.image_processing_detr.convert_segmentation_to_rle
-def convert_segmentation_to_rle(segmentation):
-    """
-    Converts given segmentation map of shape `(height, width)` to the run-length encoding (RLE) format.
-
-    Args:
-        segmentation (`torch.Tensor` or `numpy.array`):
-            A segmentation map of shape `(height, width)` where each value denotes a segment or class id.
-    Returns:
-        `List[List]`: A list of lists, where each list is the run-length encoding of a segment / class id.
-    """
-    segment_ids = torch.unique(segmentation)
-
-    run_length_encodings = []
-    for idx in segment_ids:
-        mask = torch.where(segmentation == idx, 1, 0)
-        rle = binary_mask_to_rle(mask)
-        run_length_encodings.append(rle)
-
-    return run_length_encodings
+def check_img_size(imgsz, s=64, floor=256):
+    # Check and adjust image size to be a multiple of stride s in each dimension
+    if isinstance(imgsz, int):  # If it's an integer, e.g., img_size=640
+        new_size = max(make_divisible(imgsz, s), floor)
+    else:  # If it's a list, e.g., img_size=[640, 480]
+        new_size = [max(make_divisible(x, s), floor) for x in imgsz]
+    return new_size
 
 
-# Copied from transformers.models.detr.image_processing_detr.remove_low_and_no_objects
-def remove_low_and_no_objects(masks, scores, labels, object_mask_threshold, num_labels):
-    """
-    Binarize the given masks using `object_mask_threshold`, it returns the associated values of `masks`, `scores` and
-    `labels`.
-
-    Args:
-        masks (`torch.Tensor`):
-            A tensor of shape `(num_queries, height, width)`.
-        scores (`torch.Tensor`):
-            A tensor of shape `(num_queries)`.
-        labels (`torch.Tensor`):
-            A tensor of shape `(num_queries)`.
-        object_mask_threshold (`float`):
-            A number between 0 and 1 used to binarize the masks.
-    Raises:
-        `ValueError`: Raised when the first dimension doesn't match in all input tensors.
-    Returns:
-        `Tuple[`torch.Tensor`, `torch.Tensor`, `torch.Tensor`]`: The `masks`, `scores` and `labels` without the region
-        < `object_mask_threshold`.
-    """
-    if not (masks.shape[0] == scores.shape[0] == labels.shape[0]):
-        raise ValueError("mask, scores and labels must have the same shape!")
-
-    to_keep = labels.ne(num_labels) & (scores > object_mask_threshold)
-
-    return masks[to_keep], scores[to_keep], labels[to_keep]
-
-
-# Copied from transformers.models.detr.image_processing_detr.check_segment_validity
-def check_segment_validity(mask_labels, mask_probs, k, mask_threshold=0.5, overlap_mask_area_threshold=0.8):
-    # Get the mask associated with the k class
-    mask_k = mask_labels == k
-    mask_k_area = mask_k.sum()
-
-    # Compute the area of all the stuff in query k
-    original_area = (mask_probs[k] >= mask_threshold).sum()
-    mask_exists = mask_k_area > 0 and original_area > 0
-
-    # Eliminate disconnected tiny segments
-    if mask_exists:
-        area_ratio = mask_k_area / original_area
-        if not area_ratio.item() > overlap_mask_area_threshold:
-            mask_exists = False
-
-    return mask_exists, mask_k
-
-
-# Copied from transformers.models.detr.image_processing_detr.compute_segments
-def compute_segments(
-    mask_probs,
-    pred_scores,
-    pred_labels,
-    mask_threshold: float = 0.5,
-    overlap_mask_area_threshold: float = 0.8,
-    label_ids_to_fuse: Optional[Set[int]] = None,
-    target_size: Tuple[int, int] = None,
-):
-    height = mask_probs.shape[1] if target_size is None else target_size[0]
-    width = mask_probs.shape[2] if target_size is None else target_size[1]
-
-    segmentation = torch.zeros((height, width), dtype=torch.int32, device=mask_probs.device)
-    segments: List[Dict] = []
-
-    if target_size is not None:
-        mask_probs = nn.functional.interpolate(
-            mask_probs.unsqueeze(0), size=target_size, mode="bilinear", align_corners=False
-        )[0]
-
-    current_segment_id = 0
-
-    # Weigh each mask by its prediction score
-    mask_probs *= pred_scores.view(-1, 1, 1)
-    mask_labels = mask_probs.argmax(0)  # [height, width]
-
-    # Keep track of instances of each class
-    stuff_memory_list: Dict[str, int] = {}
-    for k in range(pred_labels.shape[0]):
-        pred_class = pred_labels[k].item()
-        should_fuse = pred_class in label_ids_to_fuse
-
-        # Check if mask exists and large enough to be a segment
-        mask_exists, mask_k = check_segment_validity(
-            mask_labels, mask_probs, k, mask_threshold, overlap_mask_area_threshold
-        )
-
-        if mask_exists:
-            if pred_class in stuff_memory_list:
-                current_segment_id = stuff_memory_list[pred_class]
-            else:
-                current_segment_id += 1
-
-            # Add current object segment to final segmentation map
-            segmentation[mask_k] = current_segment_id
-            segment_score = round(pred_scores[k].item(), 6)
-            segments.append(
-                {
-                    "id": current_segment_id,
-                    "label_id": pred_class,
-                    "was_fused": should_fuse,
-                    "score": segment_score,
-                }
-            )
-            if should_fuse:
-                stuff_memory_list[pred_class] = current_segment_id
-
-    return segmentation, segments
-
-
-class YolosImageProcessor(BaseImageProcessor):
+class Yolov6ImageProcessor(BaseImageProcessor):
     r"""
     Constructs a Detr image processor.
 
     Args:
-        format (`str`, *optional*, defaults to `"coco_detection"`):
+        format (`str`, *optional*, defaults to `AnnotationFormat.COCO_DETECTION`):
             Data format of the annotations. One of "coco_detection" or "coco_panoptic".
         do_resize (`bool`, *optional*, defaults to `True`):
             Controls whether to resize the image's (height, width) dimensions to the specified `size`. Can be
             overridden by the `do_resize` parameter in the `preprocess` method.
-        size (`Dict[str, int]` *optional*, defaults to `{"shortest_edge": 800, "longest_edge": 1333}`):
-            Size of the image's `(height, width)` dimensions after resizing. Can be overridden by the `size` parameter
-            in the `preprocess` method. Available options are:
-                - `{"height": int, "width": int}`: The image will be resized to the exact size `(height, width)`.
-                    Do NOT keep the aspect ratio.
-                - `{"shortest_edge": int, "longest_edge": int}`: The image will be resized to a maximum size respecting
-                    the aspect ratio and keeping the shortest edge less or equal to `shortest_edge` and the longest edge
-                    less or equal to `longest_edge`.
-                - `{"max_height": int, "max_width": int}`: The image will be resized to the maximum size respecting the
-                    aspect ratio and keeping the height less or equal to `max_height` and the width less or equal to
-                    `max_width`.
+        size (`Dict[str, int]` *optional*, defaults to `{"shortest_edge": 640, "longest_edge": 640}`):
+            Size of the image's (height, width) dimensions after resizing. Can be overridden by the `size` parameter in
+            the `preprocess` method.
         resample (`PILImageResampling`, *optional*, defaults to `PILImageResampling.BILINEAR`):
             Resampling filter to use if resizing the image.
         do_rescale (`bool`, *optional*, defaults to `True`):
@@ -738,24 +529,19 @@ class YolosImageProcessor(BaseImageProcessor):
         rescale_factor (`int` or `float`, *optional*, defaults to `1/255`):
             Scale factor to use if rescaling the image. Can be overridden by the `rescale_factor` parameter in the
             `preprocess` method.
-        do_normalize:
             Controls whether to normalize the image. Can be overridden by the `do_normalize` parameter in the
             `preprocess` method.
+        do_normalize (`bool`, *optional*, defaults to `False`): <fill_docstring>
         image_mean (`float` or `List[float]`, *optional*, defaults to `IMAGENET_DEFAULT_MEAN`):
             Mean values to use when normalizing the image. Can be a single value or a list of values, one for each
             channel. Can be overridden by the `image_mean` parameter in the `preprocess` method.
         image_std (`float` or `List[float]`, *optional*, defaults to `IMAGENET_DEFAULT_STD`):
             Standard deviation values to use when normalizing the image. Can be a single value or a list of values, one
             for each channel. Can be overridden by the `image_std` parameter in the `preprocess` method.
+        do_convert_annotations (`Optional`, *optional*): <fill_docstring>
         do_pad (`bool`, *optional*, defaults to `True`):
-            Controls whether to pad the image. Can be overridden by the `do_pad` parameter in the `preprocess`
-            method. If `True`, padding will be applied to the bottom and right of the image with zeros.
-            If `pad_size` is provided, the image will be padded to the specified dimensions.
-            Otherwise, the image will be padded to the maximum height and width of the batch.
-        pad_size (`Dict[str, int]`, *optional*):
-            The size `{"height": int, "width" int}` to pad the images to. Must be larger than any image size
-            provided for preprocessing. If `pad_size` is not provided, images will be padded to the largest
-            height and width in the batch.
+            Controls whether to pad the image to the largest image in a batch and create a pixel mask. Can be
+            overridden by the `do_pad` parameter in the `preprocess` method.
     """
 
     model_input_names = ["pixel_values", "pixel_mask"]
@@ -768,12 +554,11 @@ class YolosImageProcessor(BaseImageProcessor):
         resample: PILImageResampling = PILImageResampling.BILINEAR,
         do_rescale: bool = True,
         rescale_factor: Union[int, float] = 1 / 255,
-        do_normalize: bool = True,
+        do_normalize: bool = False,
         image_mean: Union[float, List[float]] = None,
         image_std: Union[float, List[float]] = None,
         do_convert_annotations: Optional[bool] = None,
         do_pad: bool = True,
-        pad_size: Optional[Dict[str, int]] = None,
         **kwargs,
     ) -> None:
         if "pad_and_return_pixel_mask" in kwargs:
@@ -786,9 +571,9 @@ class YolosImageProcessor(BaseImageProcessor):
             )
             max_size = kwargs.pop("max_size")
         else:
-            max_size = None if size is None else 1333
+            max_size = None if size is None else 640
 
-        size = size if size is not None else {"shortest_edge": 800, "longest_edge": 1333}
+        size = size if size is not None else {"shortest_edge": 640, "longest_edge": 640}
         size = get_size_dict(size, max_size=max_size, default_to_square=False)
 
         # Backwards compatibility
@@ -807,28 +592,6 @@ class YolosImageProcessor(BaseImageProcessor):
         self.image_mean = image_mean if image_mean is not None else IMAGENET_DEFAULT_MEAN
         self.image_std = image_std if image_std is not None else IMAGENET_DEFAULT_STD
         self.do_pad = do_pad
-        self.pad_size = pad_size
-        self._valid_processor_keys = [
-            "images",
-            "annotations",
-            "return_segmentation_masks",
-            "masks_path",
-            "do_resize",
-            "size",
-            "resample",
-            "do_rescale",
-            "rescale_factor",
-            "do_normalize",
-            "image_mean",
-            "image_std",
-            "do_convert_annotations",
-            "do_pad",
-            "pad_size",
-            "format",
-            "return_tensors",
-            "data_format",
-            "input_data_format",
-        ]
 
     @classmethod
     # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.from_dict with Detr->Yolos
@@ -1080,25 +843,23 @@ class YolosImageProcessor(BaseImageProcessor):
     def pad(
         self,
         images: List[np.ndarray],
-        annotations: Optional[List[Dict[str, Any]]] = None,
+        annotations: Optional[Union[AnnotationType, List[AnnotationType]]] = None,
         constant_values: Union[float, Iterable[float]] = 0,
-        return_pixel_mask: bool = False,
+        return_pixel_mask: bool = True,
         return_tensors: Optional[Union[str, TensorType]] = None,
         data_format: Optional[ChannelDimension] = None,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
         update_bboxes: bool = True,
-        pad_size: Optional[Dict[str, int]] = None,
     ) -> BatchFeature:
         """
         Pads a batch of images to the bottom and right of the image with zeros to the size of largest height and width
         in the batch and optionally returns their corresponding pixel mask.
 
         Args:
-            image (`np.ndarray`):
-                Image to pad.
-            annotations (`List[Dict[str, any]]`, *optional*):
-                Annotations to pad along with the images. If provided, the bounding boxes will be updated to match the
-                padded images.
+            images (List[`np.ndarray`]):
+                Images to pad.
+            annotations (`AnnotationType` or `List[AnnotationType]`, *optional*):
+                Annotations to transform according to the padding that is applied to the images.
             constant_values (`float` or `Iterable[float]`, *optional*):
                 The value to use for the padding if `mode` is `"constant"`.
             return_pixel_mask (`bool`, *optional*, defaults to `True`):
@@ -1118,16 +879,8 @@ class YolosImageProcessor(BaseImageProcessor):
                 Whether to update the bounding boxes in the annotations to match the padded images. If the
                 bounding boxes have not been converted to relative coordinates and `(centre_x, centre_y, width, height)`
                 format, the bounding boxes will not be updated.
-            pad_size (`Dict[str, int]`, *optional*):
-                The size `{"height": int, "width" int}` to pad the images to. Must be larger than any image size
-                provided for preprocessing. If `pad_size` is not provided, images will be padded to the largest
-                height and width in the batch.
         """
-        pad_size = pad_size if pad_size is not None else self.pad_size
-        if pad_size is not None:
-            padded_size = (pad_size["height"], pad_size["width"])
-        else:
-            padded_size = get_max_height_width(images, input_data_format=input_data_format)
+        pad_size = get_max_height_width(images, input_data_format=input_data_format)
 
         annotation_list = annotations if annotations is not None else [None] * len(images)
         padded_images = []
@@ -1135,7 +888,7 @@ class YolosImageProcessor(BaseImageProcessor):
         for image, annotation in zip(images, annotation_list):
             padded_image, padded_annotation = self._pad_image(
                 image,
-                padded_size,
+                pad_size,
                 annotation,
                 constant_values=constant_values,
                 data_format=data_format,
@@ -1149,7 +902,7 @@ class YolosImageProcessor(BaseImageProcessor):
 
         if return_pixel_mask:
             masks = [
-                make_pixel_mask(image=image, output_size=padded_size, input_data_format=input_data_format)
+                make_pixel_mask(image=image, output_size=pad_size, input_data_format=input_data_format)
                 for image in images
             ]
             data["pixel_mask"] = masks
@@ -1175,15 +928,14 @@ class YolosImageProcessor(BaseImageProcessor):
         do_rescale: Optional[bool] = None,
         rescale_factor: Optional[Union[int, float]] = None,
         do_normalize: Optional[bool] = None,
+        do_convert_annotations: Optional[bool] = None,
         image_mean: Optional[Union[float, List[float]]] = None,
         image_std: Optional[Union[float, List[float]]] = None,
-        do_convert_annotations: Optional[bool] = None,
         do_pad: Optional[bool] = None,
         format: Optional[Union[str, AnnotationFormat]] = None,
         return_tensors: Optional[Union[TensorType, str]] = None,
         data_format: Union[str, ChannelDimension] = ChannelDimension.FIRST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
-        pad_size: Optional[Dict[str, int]] = None,
         **kwargs,
     ) -> BatchFeature:
         """
@@ -1211,15 +963,7 @@ class YolosImageProcessor(BaseImageProcessor):
             do_resize (`bool`, *optional*, defaults to self.do_resize):
                 Whether to resize the image.
             size (`Dict[str, int]`, *optional*, defaults to self.size):
-                Size of the image's `(height, width)` dimensions after resizing. Available options are:
-                    - `{"height": int, "width": int}`: The image will be resized to the exact size `(height, width)`.
-                        Do NOT keep the aspect ratio.
-                    - `{"shortest_edge": int, "longest_edge": int}`: The image will be resized to a maximum size respecting
-                        the aspect ratio and keeping the shortest edge less or equal to `shortest_edge` and the longest edge
-                        less or equal to `longest_edge`.
-                    - `{"max_height": int, "max_width": int}`: The image will be resized to the maximum size respecting the
-                        aspect ratio and keeping the height less or equal to `max_height` and the width less or equal to
-                        `max_width`.
+                Size of the image after resizing.
             resample (`PILImageResampling`, *optional*, defaults to self.resample):
                 Resampling filter to use when resizing the image.
             do_rescale (`bool`, *optional*, defaults to self.do_rescale):
@@ -1228,18 +972,16 @@ class YolosImageProcessor(BaseImageProcessor):
                 Rescale factor to use when rescaling the image.
             do_normalize (`bool`, *optional*, defaults to self.do_normalize):
                 Whether to normalize the image.
-            image_mean (`float` or `List[float]`, *optional*, defaults to self.image_mean):
-                Mean to use when normalizing the image.
-            image_std (`float` or `List[float]`, *optional*, defaults to self.image_std):
-                Standard deviation to use when normalizing the image.
             do_convert_annotations (`bool`, *optional*, defaults to self.do_convert_annotations):
                 Whether to convert the annotations to the format expected by the model. Converts the bounding
                 boxes from the format `(top_left_x, top_left_y, width, height)` to `(center_x, center_y, width, height)`
                 and in relative coordinates.
+            image_mean (`float` or `List[float]`, *optional*, defaults to self.image_mean):
+                Mean to use when normalizing the image.
+            image_std (`float` or `List[float]`, *optional*, defaults to self.image_std):
+                Standard deviation to use when normalizing the image.
             do_pad (`bool`, *optional*, defaults to self.do_pad):
-                Whether to pad the image. If `True`, padding will be applied to the bottom and right of
-                the image with zeros. If `pad_size` is provided, the image will be padded to the specified
-                dimensions. Otherwise, the image will be padded to the maximum height and width of the batch.
+                Whether to pad the image.
             format (`str` or `AnnotationFormat`, *optional*, defaults to self.format):
                 Format of the annotations.
             return_tensors (`str` or `TensorType`, *optional*, defaults to self.return_tensors):
@@ -1252,10 +994,6 @@ class YolosImageProcessor(BaseImageProcessor):
                 - `"channels_first"` or `ChannelDimension.FIRST`: image in (num_channels, height, width) format.
                 - `"channels_last"` or `ChannelDimension.LAST`: image in (height, width, num_channels) format.
                 - `"none"` or `ChannelDimension.NONE`: image in (height, width) format.
-            pad_size (`Dict[str, int]`, *optional*):
-                The size `{"height": int, "width" int}` to pad the images to. Must be larger than any image size
-                provided for preprocessing. If `pad_size` is not provided, images will be padded to the largest
-                height and width in the batch.
         """
         if "pad_and_return_pixel_mask" in kwargs:
             logger.warning_once(
@@ -1285,29 +1023,18 @@ class YolosImageProcessor(BaseImageProcessor):
             self.do_convert_annotations if do_convert_annotations is None else do_convert_annotations
         )
         do_pad = self.do_pad if do_pad is None else do_pad
-        pad_size = self.pad_size if pad_size is None else pad_size
         format = self.format if format is None else format
-        validate_kwargs(captured_kwargs=kwargs.keys(), valid_processor_keys=self._valid_processor_keys)
+
+        if do_resize is not None and size is None:
+            raise ValueError("Size and max_size must be specified if do_resize is True.")
+
+        if do_rescale is not None and rescale_factor is None:
+            raise ValueError("Rescale factor must be specified if do_rescale is True.")
+
+        if do_normalize is not None and (image_mean is None or image_std is None):
+            raise ValueError("Image mean and std must be specified if do_normalize is True.")
 
         images = make_list_of_images(images)
-
-        if not valid_images(images):
-            raise ValueError(
-                "Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, "
-                "torch.Tensor, tf.Tensor or jax.ndarray."
-            )
-        # Here the pad() method pads using the max of (width, height) and does not need to be validated.
-        validate_preprocess_arguments(
-            do_rescale=do_rescale,
-            rescale_factor=rescale_factor,
-            do_normalize=do_normalize,
-            image_mean=image_mean,
-            image_std=image_std,
-            do_resize=do_resize,
-            size=size,
-            resample=resample,
-        )
-
         if annotations is not None and isinstance(annotations, dict):
             annotations = [annotations]
 
@@ -1316,19 +1043,15 @@ class YolosImageProcessor(BaseImageProcessor):
                 f"The number of images ({len(images)}) and annotations ({len(annotations)}) do not match."
             )
 
+        if not valid_images(images):
+            raise ValueError(
+                "Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, "
+                "torch.Tensor, tf.Tensor or jax.ndarray."
+            )
+
         format = AnnotationFormat(format)
         if annotations is not None:
             validate_annotations(format, SUPPORTED_ANNOTATION_FORMATS, annotations)
-
-        if (
-            masks_path is not None
-            and format == AnnotationFormat.COCO_PANOPTIC
-            and not isinstance(masks_path, (pathlib.Path, str))
-        ):
-            raise ValueError(
-                "The path to the directory containing the mask PNG files should be provided as a"
-                f" `pathlib.Path` or string object, but is {type(masks_path)} instead."
-            )
 
         # All transformations expect numpy arrays
         images = [to_numpy_array(image) for image in images]
@@ -1369,7 +1092,7 @@ class YolosImageProcessor(BaseImageProcessor):
                 for image, target in zip(images, annotations):
                     orig_size = get_image_size(image, input_data_format)
                     resized_image = self.resize(
-                        image, size=size, max_size=max_size, resample=resample, input_data_format=input_data_format
+                        image, size=size, resample=resample, input_data_format=input_data_format
                     )
                     resized_annotation = self.resize_annotation(
                         target, orig_size, get_image_size(resized_image, input_data_format)
@@ -1388,28 +1111,26 @@ class YolosImageProcessor(BaseImageProcessor):
         if do_rescale:
             images = [self.rescale(image, rescale_factor, input_data_format=input_data_format) for image in images]
 
-        if do_normalize:
+        if do_convert_annotations and do_normalize:
             images = [
                 self.normalize(image, image_mean, image_std, input_data_format=input_data_format) for image in images
             ]
-
-        if do_convert_annotations and annotations is not None:
-            annotations = [
-                self.normalize_annotation(annotation, get_image_size(image, input_data_format))
-                for annotation, image in zip(annotations, images)
-            ]
+            if annotations is not None:
+                annotations = [
+                    self.normalize_annotation(annotation, get_image_size(image))
+                    for annotation, image in zip(annotations, images)
+                ]
 
         if do_pad:
             # Pads images and returns their mask: {'pixel_values': ..., 'pixel_mask': ...}
             encoded_inputs = self.pad(
                 images,
                 annotations=annotations,
-                return_pixel_mask=False,
+                return_pixel_mask=True,
                 data_format=data_format,
                 input_data_format=input_data_format,
-                update_bboxes=do_convert_annotations,
                 return_tensors=return_tensors,
-                pad_size=pad_size,
+                update_bboxes=do_convert_annotations,
             )
         else:
             images = [
@@ -1424,84 +1145,52 @@ class YolosImageProcessor(BaseImageProcessor):
 
         return encoded_inputs
 
-    # POSTPROCESSING METHODS - TODO: add support for other frameworks
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.post_process  with Detr->Yolos
-    def post_process(self, outputs, target_sizes):
-        """
-        Converts the raw output of [`YolosForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
-        bottom_right_x, bottom_right_y) format. Only supports PyTorch.
-
-        Args:
-            outputs ([`YolosObjectDetectionOutput`]):
-                Raw outputs of the model.
-            target_sizes (`torch.Tensor` of shape `(batch_size, 2)`):
-                Tensor containing the size (height, width) of each image of the batch. For evaluation, this must be the
-                original image size (before any data augmentation). For visualization, this should be the image size
-                after data augment, but before padding.
-        Returns:
-            `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
-            in the batch as predicted by the model.
-        """
-        logger.warning_once(
-            "`post_process` is deprecated and will be removed in v5 of Transformers, please use"
-            " `post_process_object_detection` instead, with `threshold=0.` for equivalent results.",
-        )
-
-        out_logits, out_bbox = outputs.logits, outputs.pred_boxes
-
-        if len(out_logits) != len(target_sizes):
-            raise ValueError("Make sure that you pass in as many target sizes as the batch dimension of the logits")
-        if target_sizes.shape[1] != 2:
-            raise ValueError("Each element of target_sizes must contain the size (h, w) of each image of the batch")
-
-        prob = nn.functional.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
-
-        # convert to [x0, y0, x1, y1] format
-        boxes = center_to_corners_format(out_bbox)
-        # and from relative [0, 1] to absolute [0, height] coordinates
-        img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1).to(boxes.device)
-        boxes = boxes * scale_fct[:, None, :]
-
-        results = [{"scores": s, "labels": l, "boxes": b} for s, l, b in zip(scores, labels, boxes)]
-        return results
-
-    # Copied from transformers.models.detr.image_processing_detr.DetrImageProcessor.post_process_object_detection with Detr->Yolos
     def post_process_object_detection(
-        self, outputs, threshold: float = 0.5, target_sizes: Union[TensorType, List[Tuple]] = None
+        self,
+        outputs,
+        threshold: float = 0.03,
+        target_sizes: Union[TensorType, List[Tuple]] = None,
+        nms_threshold: float = 0.65,
+        max_nms: int = 30000,
+        num_nms: int = 100,
     ):
         """
-        Converts the raw output of [`YolosForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
+        Converts the raw output of [`Yolov6ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
         bottom_right_x, bottom_right_y) format. Only supports PyTorch.
+        Inspired from https://github.com/meituan/YOLOv6/blob/e9656c307ae62032f40b39c7a7a5ccc31c2f0242/yolov6/utils/nms.py#L31C1-L105C18
 
         Args:
-            outputs ([`YolosObjectDetectionOutput`]):
+            outputs ([`Yolov6ObjectDetectionOutput`]):
                 Raw outputs of the model.
             threshold (`float`, *optional*):
                 Score threshold to keep object detection predictions.
             target_sizes (`torch.Tensor` or `List[Tuple[int, int]]`, *optional*):
                 Tensor of shape `(batch_size, 2)` or list of tuples (`Tuple[int, int]`) containing the target size
                 `(height, width)` of each image in the batch. If unset, predictions will not be resized.
+            nms_threshold (`float`, *optional*):
+                NMS score threshold to keep duplicated object detection predictions.
+            max_nms (`int`, *optional*):
+                Number of maximum output for intermediate results.
+            num_nms (`int`, *optional*):
+                Number of final output after the nms results.
         Returns:
             `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
             in the batch as predicted by the model.
         """
         out_logits, out_bbox = outputs.logits, outputs.pred_boxes
+        batch_size, num_queries, num_labels = out_logits.shape
 
-        if target_sizes is not None:
-            if len(out_logits) != len(target_sizes):
-                raise ValueError(
-                    "Make sure that you pass in as many target sizes as the batch dimension of the logits"
-                )
+        prob = out_logits.sigmoid().contiguous()
 
-        prob = nn.functional.softmax(out_logits, -1)
-        scores, labels = prob[..., :-1].max(-1)
+        all_scores = prob.view(batch_size, num_queries * num_labels).to(out_logits.device)
+        all_indexes = torch.arange(num_queries * num_labels)[None].repeat(batch_size, 1).to(out_logits.device)
+        all_boxes = torch.div(all_indexes, out_logits.shape[2], rounding_mode="floor")
+        all_labels = all_indexes % out_logits.shape[2]
 
-        # Convert to [x0, y0, x1, y1] format
         boxes = center_to_corners_format(out_bbox)
+        boxes = torch.gather(boxes, 1, all_boxes.unsqueeze(-1).repeat(1, 1, 4))
 
-        # Convert from relative [0, 1] to absolute [0, height] coordinates
+        # and from relative [0, config.img_size] to absolute [0, height] coordinates
         if target_sizes is not None:
             if isinstance(target_sizes, List):
                 img_h = torch.Tensor([i[0] for i in target_sizes])
@@ -1513,10 +1202,33 @@ class YolosImageProcessor(BaseImageProcessor):
             boxes = boxes * scale_fct[:, None, :]
 
         results = []
-        for s, l, b in zip(scores, labels, boxes):
-            score = s[s > threshold]
-            label = l[s > threshold]
-            box = b[s > threshold]
-            results.append({"scores": score, "labels": label, "boxes": box})
+        for b in range(batch_size):
+            box = boxes[b]
+            score = all_scores[b]
+            lbls = all_labels[b]
+
+            box = box[score > threshold]
+            lbls = lbls[score > threshold]
+            score = score[score > threshold]
+
+            if score.shape[-1] > max_nms:
+                indices = score.argsort(descending=True)[:max_nms]
+                box = box[indices, :]
+                lbls = lbls[indices]
+                score = score[indices]
+
+            # apply NMS
+            keep_inds = nms(box, score, nms_threshold)[:num_nms]
+            score = score[keep_inds]
+            lbls = lbls[keep_inds]
+            box = box[keep_inds]
+
+            results.append(
+                {
+                    "scores": score,
+                    "labels": lbls,
+                    "boxes": box,
+                }
+            )
 
         return results

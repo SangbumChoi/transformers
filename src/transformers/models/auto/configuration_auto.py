@@ -285,6 +285,7 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("xlnet", "XLNetConfig"),
         ("xmod", "XmodConfig"),
         ("yolos", "YolosConfig"),
+        ("yolov6", "Yolov6Config"),
         ("yoso", "YosoConfig"),
     ]
 )
@@ -577,6 +578,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("xlsr_wav2vec2", "XLSR-Wav2Vec2"),
         ("xmod", "X-MOD"),
         ("yolos", "YOLOS"),
+        ("yolov6", "YOLOV6"),
         ("yoso", "YOSO"),
     ]
 )
