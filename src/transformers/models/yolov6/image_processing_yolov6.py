@@ -97,7 +97,7 @@ def get_max_height_width(
     return (max_height, max_width)
 
 
-def get_size_with_aspect_ratio(image_size, size, max_size=None, mod_size=32) -> Tuple[int, int]:
+def get_size_with_aspect_ratio(image_size, size, max_size=None, mod_size=64) -> Tuple[int, int]:
     """
     Computes the output image size given the input image size and the desired output size with multiple of divisible_size.
     Args:
@@ -492,20 +492,6 @@ def resize_annotation(
             new_annotation[key] = value
 
     return new_annotation
-
-
-def make_divisible(x, divisor):
-    # Returns x rounded up to the nearest multiple of divisor
-    return math.ceil(x / divisor) * divisor
-
-
-def check_img_size(imgsz, s=64, floor=256):
-    # Check and adjust image size to be a multiple of stride s in each dimension
-    if isinstance(imgsz, int):  # If it's an integer, e.g., img_size=640
-        new_size = max(make_divisible(imgsz, s), floor)
-    else:  # If it's a list, e.g., img_size=[640, 480]
-        new_size = [max(make_divisible(x, s), floor) for x in imgsz]
-    return new_size
 
 
 class Yolov6ImageProcessor(BaseImageProcessor):
