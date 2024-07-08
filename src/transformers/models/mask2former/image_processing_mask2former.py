@@ -1234,4 +1234,3 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
 
             results.append({"segmentation": segmentation, "segments_info": segments})
         return results
-                                      
