@@ -274,7 +274,7 @@ def make_pixel_mask(
     return mask
 
 
-def convert_coco_poly_to_mask(segmentations, height: int, width: int) -> np.ndarray:
+def convert_coco_poly_to_mask(segmentations, height: int, width: int, segmentation_type: str) -> np.ndarray:
     """
     Convert a COCO polygon annotation to a mask.
 

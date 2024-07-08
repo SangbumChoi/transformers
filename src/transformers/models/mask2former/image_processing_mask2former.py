@@ -1107,10 +1107,9 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
 
             segmentation = torch.zeros((384, 384)) - 1
             if target_sizes is not None:
-                segmentation = torch.zeros(target_sizes[i]) - 1
-                pred_masks = torch.nn.functional.interpolate(
-                    pred_masks.unsqueeze(0), size=target_sizes[i], mode="nearest"
-                )[0]
+                size = target_sizes[i] if isinstance(target_sizes[i], tuple) else target_sizes[i].cpu().tolist()
+                segmentation = torch.zeros(size) - 1
+                pred_masks = torch.nn.functional.interpolate(pred_masks.unsqueeze(0), size=size, mode="nearest")[0]
 
             instance_maps, segments = [], []
             current_segment_id = 0
@@ -1235,3 +1234,4 @@ class Mask2FormerImageProcessor(BaseImageProcessor):
 
             results.append({"segmentation": segmentation, "segments_info": segments})
         return results
+                                      
