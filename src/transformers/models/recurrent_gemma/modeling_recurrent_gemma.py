@@ -254,8 +254,8 @@ class RecurrentGemmaSdpaAttention(nn.Module):
             k_out = k_out[:, :, indices]
             v_out = v_out[:, :, indices]
 
-            k_out[:, :, cache_position] = key_states
-            v_out[:, :, cache_position] = value_states
+            k_out[:, :, cache_position] = key_states.to(k_out.dtype)
+            v_out[:, :, cache_position] = value_states.to(v_out.dtype)
 
         self.key_states, self.value_states = k_out, v_out
         return k_out, v_out
@@ -539,6 +539,8 @@ class RecurrentGemmaPreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = ["cache"]
     _supports_flash_attn_2 = False
     _supports_sdpa = False  # we can't compare with eager for now
+    _supports_cache_class = True
+    _supports_quantized_cache = True
 
     def _init_weights(self, module):
         std = math.sqrt(self.config.w_init_variance_scale / self.config.conv1d_width)
