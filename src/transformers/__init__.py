@@ -249,6 +249,11 @@ _import_structure = {
         "CanineConfig",
         "CanineTokenizer",
     ],
+    "models.chameleon": [
+        "ChameleonConfig",
+        "ChameleonProcessor",
+        "ChameleonVQVAEConfig",
+    ],
     "models.chinese_clip": [
         "ChineseCLIPConfig",
         "ChineseCLIPProcessor",
@@ -462,6 +467,7 @@ _import_structure = {
         "GroupViTVisionConfig",
     ],
     "models.herbert": ["HerbertTokenizer"],
+    "models.hiera": ["HieraConfig"],
     "models.hubert": ["HubertConfig"],
     "models.ibert": ["IBertConfig"],
     "models.idefics": ["IdeficsConfig"],
@@ -808,6 +814,7 @@ _import_structure = {
     "models.yolos": ["YolosConfig"],
     "models.yolov6": ["Yolov6Config"],
     "models.yoso": ["YosoConfig"],
+    "models.zoedepth": ["ZoeDepthConfig"],
     "onnx": [],
     "pipelines": [
         "AudioClassificationPipeline",
@@ -1124,6 +1131,7 @@ else:
     _import_structure["models.bit"].extend(["BitImageProcessor"])
     _import_structure["models.blip"].extend(["BlipImageProcessor"])
     _import_structure["models.bridgetower"].append("BridgeTowerImageProcessor")
+    _import_structure["models.chameleon"].append("ChameleonImageProcessor")
     _import_structure["models.chinese_clip"].extend(["ChineseCLIPFeatureExtractor", "ChineseCLIPImageProcessor"])
     _import_structure["models.clip"].extend(["CLIPFeatureExtractor", "CLIPImageProcessor"])
     _import_structure["models.conditional_detr"].extend(
@@ -1184,6 +1192,7 @@ else:
     _import_structure["models.vivit"].append("VivitImageProcessor")
     _import_structure["models.yolos"].extend(["YolosFeatureExtractor", "YolosImageProcessor"])
     _import_structure["models.yolov6"].extend(["Yolov6ImageProcessor"])
+    _import_structure["models.zoedepth"].append("ZoeDepthImageProcessor")
 
 try:
     if not is_torchvision_available():
@@ -1285,6 +1294,7 @@ else:
             "WhisperTimeStampLogitsProcessor",
         ]
     )
+    _import_structure["modeling_flash_attention_utils"] = []
     _import_structure["modeling_outputs"] = []
     _import_structure["modeling_utils"] = ["PreTrainedModel"]
 
@@ -1604,6 +1614,15 @@ else:
             "CanineModel",
             "CaninePreTrainedModel",
             "load_tf_weights_in_canine",
+        ]
+    )
+    _import_structure["models.chameleon"].extend(
+        [
+            "ChameleonForConditionalGeneration",
+            "ChameleonModel",
+            "ChameleonPreTrainedModel",
+            "ChameleonProcessor",
+            "ChameleonVQVAE",
         ]
     )
     _import_structure["models.chinese_clip"].extend(
@@ -2282,6 +2301,15 @@ else:
             "GroupViTPreTrainedModel",
             "GroupViTTextModel",
             "GroupViTVisionModel",
+        ]
+    )
+    _import_structure["models.hiera"].extend(
+        [
+            "HieraBackbone",
+            "HieraForImageClassification",
+            "HieraForPreTraining",
+            "HieraModel",
+            "HieraPreTrainedModel",
         ]
     )
     _import_structure["models.hubert"].extend(
@@ -3596,6 +3624,12 @@ else:
             "YosoPreTrainedModel",
         ]
     )
+    _import_structure["models.zoedepth"].extend(
+        [
+            "ZoeDepthForDepthEstimation",
+            "ZoeDepthPreTrainedModel",
+        ]
+    )
     _import_structure["optimization"] = [
         "Adafactor",
         "AdamW",
@@ -4881,6 +4915,11 @@ if TYPE_CHECKING:
         CanineConfig,
         CanineTokenizer,
     )
+    from .models.chameleon import (
+        ChameleonConfig,
+        ChameleonProcessor,
+        ChameleonVQVAEConfig,
+    )
     from .models.chinese_clip import (
         ChineseCLIPConfig,
         ChineseCLIPProcessor,
@@ -5113,6 +5152,7 @@ if TYPE_CHECKING:
         GroupViTVisionConfig,
     )
     from .models.herbert import HerbertTokenizer
+    from .models.hiera import HieraConfig
     from .models.hubert import HubertConfig
     from .models.ibert import IBertConfig
     from .models.idefics import (
@@ -5507,6 +5547,7 @@ if TYPE_CHECKING:
     from .models.xmod import XmodConfig
     from .models.yolos import YolosConfig
     from .models.yoso import YosoConfig
+    from .models.zoedepth import ZoeDepthConfig
 
     # Pipelines
     from .pipelines import (
@@ -5796,6 +5837,7 @@ if TYPE_CHECKING:
         from .models.bit import BitImageProcessor
         from .models.blip import BlipImageProcessor
         from .models.bridgetower import BridgeTowerImageProcessor
+        from .models.chameleon import ChameleonImageProcessor
         from .models.chinese_clip import (
             ChineseCLIPFeatureExtractor,
             ChineseCLIPImageProcessor,
@@ -5883,6 +5925,7 @@ if TYPE_CHECKING:
         from .models.vivit import VivitImageProcessor
         from .models.yolos import YolosFeatureExtractor, YolosImageProcessor
         from .models.yolov6 import Yolov6ImageProcessor
+        from .models.zoedepth import ZoeDepthImageProcessor
 
     try:
         if not is_torchvision_available():
@@ -6242,6 +6285,13 @@ if TYPE_CHECKING:
             CanineModel,
             CaninePreTrainedModel,
             load_tf_weights_in_canine,
+        )
+        from .models.chameleon import (
+            ChameleonForConditionalGeneration,
+            ChameleonModel,
+            ChameleonPreTrainedModel,
+            ChameleonProcessor,
+            ChameleonVQVAE,
         )
         from .models.chinese_clip import (
             ChineseCLIPModel,
@@ -6794,6 +6844,13 @@ if TYPE_CHECKING:
             GroupViTPreTrainedModel,
             GroupViTTextModel,
             GroupViTVisionModel,
+        )
+        from .models.hiera import (
+            HieraBackbone,
+            HieraForImageClassification,
+            HieraForPreTraining,
+            HieraModel,
+            HieraPreTrainedModel,
         )
         from .models.hubert import (
             HubertForCTC,
@@ -7814,6 +7871,10 @@ if TYPE_CHECKING:
             YosoLayer,
             YosoModel,
             YosoPreTrainedModel,
+        )
+        from .models.zoedepth import (
+            ZoeDepthForDepthEstimation,
+            ZoeDepthPreTrainedModel,
         )
 
         # Optimization
