@@ -792,6 +792,8 @@
         title: GIT
       - local: model_doc/grounding-dino
         title: Grounding DINO
+      - local: model_doc/grounding-dino2
+        title: groundingdino2
       - local: model_doc/groupvit
         title: GroupViT
       - local: model_doc/idefics

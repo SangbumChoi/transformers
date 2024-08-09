@@ -119,6 +119,7 @@ MODEL_MAPPING_NAMES = OrderedDict(
         ("gptsan-japanese", "GPTSanJapaneseForConditionalGeneration"),
         ("graphormer", "GraphormerModel"),
         ("grounding-dino", "GroundingDinoModel"),
+        ("grounding-dino2", "GroundingDino2Model"),
         ("groupvit", "GroupViTModel"),
         ("hiera", "HieraModel"),
         ("hubert", "HubertModel"),
@@ -795,6 +796,7 @@ MODEL_FOR_ZERO_SHOT_OBJECT_DETECTION_MAPPING_NAMES = OrderedDict(
     [
         # Model for Zero Shot Object Detection mapping
         ("grounding-dino", "GroundingDinoForObjectDetection"),
+        ("grounding-dino2", "GroundingDino2ForObjectDetection"),
         ("owlv2", "Owlv2ForObjectDetection"),
         ("owlvit", "OwlViTForObjectDetection"),
     ]

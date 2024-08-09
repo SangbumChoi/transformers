@@ -463,6 +463,10 @@ _import_structure = {
         "GroundingDinoConfig",
         "GroundingDinoProcessor",
     ],
+    "models.grounding_dino2": [
+        "GroundingDino2Config",
+       
+    ],
     "models.groupvit": [
         "GroupViTConfig",
         "GroupViTTextConfig",
@@ -2306,6 +2310,13 @@ else:
             "GroundingDinoForObjectDetection",
             "GroundingDinoModel",
             "GroundingDinoPreTrainedModel",
+        ]
+    )
+    _import_structure["models.grounding_dino2"].extend(
+        [
+            "GroundingDino2ForObjectDetection",
+            "GroundingDino2Model",
+            "GroundingDino2PreTrainedModel",
         ]
     )
     _import_structure["models.groupvit"].extend(
@@ -5177,6 +5188,10 @@ if TYPE_CHECKING:
         GroundingDinoConfig,
         GroundingDinoProcessor,
     )
+    from .models.grounding_dino2 import (
+        GroundingDino2Config,
+       
+    )
     from .models.groupvit import (
         GroupViTConfig,
         GroupViTTextConfig,
@@ -6881,6 +6896,11 @@ if TYPE_CHECKING:
             GroundingDinoForObjectDetection,
             GroundingDinoModel,
             GroundingDinoPreTrainedModel,
+        )
+        from .models.grounding_dino2 import (
+            GroundingDino2ForObjectDetection,
+            GroundingDino2Model,
+            GroundingDino2PreTrainedModel,
         )
         from .models.groupvit import (
             GroupViTModel,
