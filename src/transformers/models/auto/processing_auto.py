@@ -62,6 +62,7 @@ PROCESSOR_MAPPING_NAMES = OrderedDict(
         ("git", "GitProcessor"),
         ("grounding-dino", "GroundingDinoProcessor"),
         ("grounding-dino2", "GroundingDino2Processor"),
+        ("grounding-dino2", "GroundingDino2Processor"),
         ("groupvit", "CLIPProcessor"),
         ("hubert", "Wav2Vec2Processor"),
         ("idefics", "IdeficsProcessor"),

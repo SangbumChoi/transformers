@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch groundingdino2 model."""
+"""PyTorch Grounding DINO 2 model."""
 
 import math
 import os
@@ -221,10 +221,10 @@ class GroundingDino2EncoderOutput(ModelOutput):
 
 
 @dataclass
-# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoModelOutput with GroundingDino->GroundingDino2,Grounding DINO->groundingdino2
+# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoModelOutput with GroundingDino->GroundingDino2,Grounding DINO->Grounding DINO 2
 class GroundingDino2ModelOutput(ModelOutput):
     """
-    Base class for outputs of the groundingdino2 encoder-decoder model.
+    Base class for outputs of the Grounding DINO 2 encoder-decoder model.
 
     Args:
         last_hidden_state (`torch.FloatTensor` of shape `(batch_size, num_queries, hidden_size)`):
@@ -645,7 +645,7 @@ def multi_scale_deformable_attention(
     return output.transpose(1, 2).contiguous()
 
 
-# Copied from transformers.models.deformable_detr.modeling_deformable_detr.DeformableDetrMultiscaleDeformableAttention with DeformableDetr->GroundingDino2, Deformable DETR->groundingdino2
+# Copied from transformers.models.deformable_detr.modeling_deformable_detr.DeformableDetrMultiscaleDeformableAttention with DeformableDetr->GroundingDino2, Deformable DETR->Grounding DINO 2
 class GroundingDino2MultiscaleDeformableAttention(nn.Module):
     """
     Multiscale deformable attention as proposed in Deformable DETR.
@@ -1823,14 +1823,14 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         )
 
 
-# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoDecoder with GroundingDino->GroundingDino2,Grounding DINO->groundingdino2
+# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoDecoder with GroundingDino->GroundingDino2,Grounding DINO->Grounding DINO 2
 class GroundingDino2Decoder(GroundingDino2PreTrainedModel):
     """
     Transformer decoder consisting of *config.decoder_layers* layers. Each layer is a [`GroundingDino2DecoderLayer`].
 
     The decoder updates the query embeddings through multiple self-attention and cross-attention layers.
 
-    Some tweaks for groundingdino2:
+    Some tweaks for Grounding DINO 2:
 
     - `position_embeddings`, `reference_points`, `spatial_shapes` and `valid_ratios` are added to the forward pass.
     - it also returns a stack of intermediate outputs and reference points from all decoding layers.
@@ -2104,7 +2104,7 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
 
 @add_start_docstrings(
     """
-    The bare groundingdino2 Model (consisting of a backbone and encoder-decoder Transformer) outputting raw
+    The bare Grounding DINO 2 Model (consisting of a backbone and encoder-decoder Transformer) outputting raw
     hidden-states without any specific head on top.
     """,
     GROUNDING_DINO_START_DOCSTRING,
@@ -2985,12 +2985,12 @@ def build_text_mask(logits, attention_mask):
 
 @add_start_docstrings(
     """
-    groundingdino2 Model (consisting of a backbone and encoder-decoder Transformer) with object detection heads on top,
+    Grounding DINO 2 Model (consisting of a backbone and encoder-decoder Transformer) with object detection heads on top,
     for tasks such as COCO detection.
     """,
     GROUNDING_DINO_START_DOCSTRING,
 )
-# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoForObjectDetection with GroundingDino->GroundingDino2,Grounding DINO->groundingdino2,IDEA-Research/grounding-dino-tiny->superb-ai/grounding-dino2-tiny
+# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoForObjectDetection with GroundingDino->GroundingDino2,Grounding DINO->Grounding DINO 2,IDEA-Research/grounding-dino-tiny->superb-ai/grounding-dino2-tiny
 class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
     # When using clones, all layers > 0 will be clones, but layer 0 *is* required
     # the bbox_embed in the decoder are all clones though
@@ -3090,7 +3090,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        # First, sent images through groundingdino2 base model to obtain encoder + decoder outputs
+        # First, sent images through Grounding DINO 2 base model to obtain encoder + decoder outputs
         outputs = self.model(
             pixel_values=pixel_values,
             input_ids=input_ids,

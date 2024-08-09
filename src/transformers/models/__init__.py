@@ -105,6 +105,7 @@ from . import (
     gptj,
     grounding_dino,
     grounding_dino2,
+    grounding_dino2,
     groupvit,
     herbert,
     hiera,

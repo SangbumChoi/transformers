@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Testing suite for the PyTorch groundingdino2 model."""
+"""Testing suite for the PyTorch Grounding DINO 2 model."""
 
 import collections
 import inspect
@@ -296,15 +296,15 @@ class GroundingDino2ModelTest(ModelTesterMixin, PipelineTesterMixin, unittest.Te
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_object_detection_head_model(*config_and_inputs)
 
-    @unittest.skip(reason="groundingdino2 does not use inputs_embeds")
+    @unittest.skip(reason="Grounding DINO 2 does not use inputs_embeds")
     def test_inputs_embeds(self):
         pass
 
-    @unittest.skip(reason="groundingdino2 does not have a get_input_embeddings method")
+    @unittest.skip(reason="Grounding DINO 2 does not have a get_input_embeddings method")
     def test_model_get_set_embeddings(self):
         pass
 
-    @unittest.skip(reason="groundingdino2 does not use token embeddings")
+    @unittest.skip(reason="Grounding DINO 2 does not use token embeddings")
     def test_resize_tokens_embeddings(self):
         pass
 

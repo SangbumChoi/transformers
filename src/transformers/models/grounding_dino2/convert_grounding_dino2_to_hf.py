@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Convert groundingdino2 checkpoints from the original repository.
+"""Convert Grounding DINO 2 checkpoints from the original repository.
 
 URL: https://github.com/IDEA-Research/GroundingDINO"""
 
@@ -122,7 +122,7 @@ def create_rename_keys(state_dict, config):
                                 f"model.backbone.conv_encoder.model.encoder.layers.{layer}.downsample.norm.bias"))
 
     for out_indice in config.backbone_config.out_indices:
-        # groundingdino2 implementation of out_indices isn't aligned with transformers
+        # Grounding DINO 2 implementation of out_indices isn't aligned with transformers
         rename_keys.append((f"backbone.0.norm{out_indice-1}.weight",
                         f"model.backbone.conv_encoder.model.hidden_states_norms.stage{out_indice}.weight"))
         rename_keys.append((f"backbone.0.norm{out_indice-1}.bias",

@@ -14,11 +14,11 @@ rendered properly in your Markdown viewer.
 
 -->
 
-# groundingdino2
+# Grounding DINO 2
 
 ## Overview
 
-The groundingdino2 model was proposed in [<INSERT PAPER NAME HERE>](<INSERT PAPER LINK HERE>) by <INSERT AUTHORS HERE>.
+The Grounding DINO 2 model was proposed in [<INSERT PAPER NAME HERE>](<INSERT PAPER LINK HERE>) by <INSERT AUTHORS HERE>.
 <INSERT SHORT SUMMARY HERE>
 
 The abstract from the paper is the following:
