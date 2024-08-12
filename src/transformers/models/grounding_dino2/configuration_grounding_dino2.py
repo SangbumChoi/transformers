@@ -163,6 +163,7 @@ class GroundingDino2Config(PretrainedConfig):
         use_timm_backbone=False,
         backbone_kwargs=None,
         text_config=None,
+        vision_config=None,
         num_queries=900,
         encoder_layers=6,
         encoder_ffn_dim=2048,
@@ -281,6 +282,14 @@ class GroundingDino2Config(PretrainedConfig):
 
         self.text_config = text_config
         self.max_text_len = max_text_len
+        # Visual prompt backbone
+        if isinstance(vision_config, dict):
+            vision_config["model_type"] = vision_config["model_type"] if "model_type" in vision_config else "bert"
+            vision_config = CONFIG_MAPPING[vision_config["model_type"]](**vision_config)
+        elif vision_config is None:
+            vision_config = CONFIG_MAPPING["clip"]()
+
+        self.vision_config = vision_config
 
         # Text Enhancer
         self.text_enhancer_dropout = text_enhancer_dropout

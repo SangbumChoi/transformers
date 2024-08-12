@@ -2156,6 +2156,12 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         )
         self.text_projection = nn.Linear(config.text_config.hidden_size, config.d_model)
 
+        # Create visual backbone
+        self.visual_backbone = AutoModel.from_config(
+            config.vision_config, add_pooling_layer=False, attn_implementation=config._attn_implementation
+        )
+        self.visual_projection = nn.Linear(config.vision_config.projection_dim, config.d_model)
+
         if config.embedding_init_target or not config.two_stage:
             self.query_position_embeddings = nn.Embedding(config.num_queries, config.d_model)
 
@@ -2265,7 +2271,8 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
     def forward(
         self,
         pixel_values: Tensor,
-        input_ids: Tensor,
+        input_ids: Optional[Tensor] = None,
+        semantic_
         token_type_ids: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
         pixel_mask: Optional[Tensor] = None,
