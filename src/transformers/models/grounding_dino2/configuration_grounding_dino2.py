@@ -162,8 +162,7 @@ class GroundingDino2Config(PretrainedConfig):
         use_pretrained_backbone=False,
         use_timm_backbone=False,
         backbone_kwargs=None,
-        text_config=None,
-        vision_config=None,
+        multimodal_config=None,
         num_queries=900,
         encoder_layers=6,
         encoder_ffn_dim=2048,
@@ -234,9 +233,9 @@ class GroundingDino2Config(PretrainedConfig):
             backbone_kwargs=backbone_kwargs,
         )
 
-        if text_config is None:
-            text_config = {}
-            logger.info("text_config is None. Initializing the text config with default values (`BertConfig`).")
+        if multimodal_config is None:
+            multimodal_config = {}
+            logger.info("multimodal_config is None. Initializing the text config with default values (`ClipConfig`).")
 
         self.backbone_config = backbone_config
         self.backbone = backbone
@@ -273,23 +272,17 @@ class GroundingDino2Config(PretrainedConfig):
         self.class_loss_reduction = class_loss_reduction
         self.focal_alpha = focal_alpha
         self.disable_custom_kernels = disable_custom_kernels
-        # Text backbone
-        if isinstance(text_config, dict):
-            text_config["model_type"] = text_config["model_type"] if "model_type" in text_config else "bert"
-            text_config = CONFIG_MAPPING[text_config["model_type"]](**text_config)
-        elif text_config is None:
-            text_config = CONFIG_MAPPING["bert"]()
+        # Multi-modal backbone
+        if isinstance(multimodal_config, dict):
+            multimodal_config["model_type"] = (
+                multimodal_config["model_type"] if "model_type" in multimodal_config else "clip"
+            )
+            multimodal_config = CONFIG_MAPPING[multimodal_config["model_type"]](**multimodal_config)
+        elif multimodal_config is None:
+            multimodal_config = CONFIG_MAPPING["clip"]()
 
-        self.text_config = text_config
+        self.multimodal_config = multimodal_config
         self.max_text_len = max_text_len
-        # Visual prompt backbone
-        if isinstance(vision_config, dict):
-            vision_config["model_type"] = vision_config["model_type"] if "model_type" in vision_config else "bert"
-            vision_config = CONFIG_MAPPING[vision_config["model_type"]](**vision_config)
-        elif vision_config is None:
-            vision_config = CONFIG_MAPPING["clip"]()
-
-        self.vision_config = vision_config
 
         # Text Enhancer
         self.text_enhancer_dropout = text_enhancer_dropout

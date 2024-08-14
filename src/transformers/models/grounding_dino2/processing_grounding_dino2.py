@@ -110,7 +110,7 @@ class GroundingDino2Processor(ProcessorMixin):
     """
 
     attributes = ["image_processor", "tokenizer"]
-    image_processor_class = "GroundingDino2ImageProcessor"
+    image_processor_class = "GroundingDinoImageProcessor"
     tokenizer_class = "AutoTokenizer"
 
     def __init__(self, image_processor, tokenizer):

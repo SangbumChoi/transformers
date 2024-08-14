@@ -1719,6 +1719,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         text_position_embedding: Optional[Tensor] = None,
         text_self_attention_masks: Optional[Tensor] = None,
         text_position_ids: Optional[Tensor] = None,
+        visual_features: Optional[Tensor] = None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -2060,7 +2061,10 @@ class GroundingDino2Decoder(GroundingDino2PreTrainedModel):
 
 
 # these correspond to [CLS], [SEP], . and ?
-SPECIAL_TOKENS = [101, 102, 1012, 1029]
+# Bert tokens
+# SPECIAL_TOKENS = [101, 102, 1012, 1029]
+# Clip tokens
+SPECIAL_TOKENS = [49406, 49407, 269]
 
 
 def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTensor) -> Tuple[Tensor, Tensor]:
@@ -2070,7 +2074,7 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
             Indices of input sequence tokens in the vocabulary.
     Returns:
         `tuple(torch.Tensor)` comprising attention mask between each special tokens and position_ids:
-        - **attention_mask** (`torch.BoolTensor` of shape `(batch_size, sequence_length, sequence_length)`)
+        - **attention_mask** (`torch.BoolTensor` of shape `(batch_size, sequence_length)`)
         - **position_ids** (`torch.LongTensor` of shape `(batch_size, sequence_length)`)
     """
     batch_size, num_token = input_ids.shape
@@ -2083,23 +2087,28 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
     idxs = torch.nonzero(special_tokens_mask)
 
     # generate attention mask and positional ids
-    attention_mask = torch.eye(num_token, device=input_ids.device).bool().unsqueeze(0).repeat(batch_size, 1, 1)
+    text_self_attention_masks = (
+        torch.eye(num_token, device=input_ids.device).bool().unsqueeze(0).repeat(batch_size, 1, 1)
+    )
+    attention_masks = torch.zeros((batch_size, num_token), device=input_ids.device)
     position_ids = torch.zeros((batch_size, num_token), device=input_ids.device)
     previous_col = 0
     for i in range(idxs.shape[0]):
         row, col = idxs[i]
         if (col == 0) or (col == num_token - 1):
-            attention_mask[row, col, col] = True
+            text_self_attention_masks[row, col, col] = True
+            attention_masks[row, col] = False
             position_ids[row, col] = 0
         else:
-            attention_mask[row, previous_col + 1 : col + 1, previous_col + 1 : col + 1] = True
+            text_self_attention_masks[row, previous_col + 1 : col + 1, previous_col + 1 : col + 1] = True
+            attention_masks[row, previous_col + 2 : col + 1] = True
             position_ids[row, previous_col + 1 : col + 1] = torch.arange(
                 0, col - previous_col, device=input_ids.device
             )
 
         previous_col = col
 
-    return attention_mask, position_ids.to(torch.long)
+    return attention_masks, text_self_attention_masks, position_ids.to(torch.long)
 
 
 @add_start_docstrings(
@@ -2151,16 +2160,10 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             )
 
         # Create text backbone
-        self.text_backbone = AutoModel.from_config(
-            config.text_config, add_pooling_layer=False, attn_implementation=config._attn_implementation
+        self.multimodal_backbone = AutoModel.from_config(
+            config.multimodal_config, attn_implementation=config._attn_implementation
         )
-        self.text_projection = nn.Linear(config.text_config.hidden_size, config.d_model)
-
-        # Create visual backbone
-        self.visual_backbone = AutoModel.from_config(
-            config.vision_config, add_pooling_layer=False, attn_implementation=config._attn_implementation
-        )
-        self.visual_projection = nn.Linear(config.vision_config.projection_dim, config.d_model)
+        self.multimodal_projection = nn.Linear(config.multimodal_config.text_config.hidden_size, config.d_model)
 
         if config.embedding_init_target or not config.two_stage:
             self.query_position_embeddings = nn.Embedding(config.num_queries, config.d_model)
@@ -2272,9 +2275,9 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         self,
         pixel_values: Tensor,
         input_ids: Optional[Tensor] = None,
-        semantic_
         token_type_ids: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
+        visual_prompts: Optional[Tensor] = None,
         pixel_mask: Optional[Tensor] = None,
         encoder_outputs=None,
         output_attentions=None,
@@ -2311,13 +2314,15 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        text_self_attention_masks, position_ids = generate_masks_with_special_tokens_and_transfer_map(input_ids)
+        attention_masks, text_self_attention_masks, position_ids = generate_masks_with_special_tokens_and_transfer_map(
+            input_ids
+        )
 
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        if token_type_ids is None:
-            token_type_ids = torch.zeros_like(input_ids)
+        # if token_type_ids is None:
+        #     token_type_ids = torch.zeros_like(input_ids)
 
         text_token_mask = attention_mask.bool()  # just to avoid renaming everywhere
 
@@ -2326,15 +2331,15 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             text_self_attention_masks = text_self_attention_masks[:, :max_text_len, :max_text_len]
             position_ids = position_ids[:, :max_text_len]
             input_ids = input_ids[:, :max_text_len]
-            token_type_ids = token_type_ids[:, :max_text_len]
+            # token_type_ids = token_type_ids[:, :max_text_len]
             text_token_mask = text_token_mask[:, :max_text_len]
 
         # Extract text features from text backbone
-        text_outputs = self.text_backbone(
-            input_ids, text_self_attention_masks, token_type_ids, position_ids, return_dict=return_dict
+        multimodal_outputs = self.multimodal_backbone.text_model(
+            input_ids, attention_mask=attention_masks, position_ids=position_ids, return_dict=return_dict
         )
-        text_features = text_outputs.last_hidden_state if return_dict else text_outputs[0]
-        text_features = self.text_projection(text_features)
+        text_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
+        text_features = self.multimodal_projection(text_features)
 
         batch_size, num_channels, height, width = pixel_values.shape
         device = pixel_values.device
