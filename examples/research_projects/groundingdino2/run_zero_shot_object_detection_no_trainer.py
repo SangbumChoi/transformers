@@ -591,9 +591,9 @@ def main():
     # Freeze both text_backbone
     if args.freeze_backbone:
         model.model.freeze_backbone()
-    # if args.freeze_text_backbone:
-    #     for name, param in model.model.text_backbone.named_parameters():
-    #         param.requires_grad_(False)
+    if args.freeze_text_backbone:
+        for name, param in model.model.multimodal_backbone.named_parameters():
+            param.requires_grad_(False)
 
     # ------------------------------------------------------------------------------------------------
     # Define image augmentations and dataset transforms
