@@ -39,14 +39,12 @@ from tqdm.auto import tqdm
 
 import transformers
 from transformers import (
-    AutoConfig,
-    AutoModelForZeroShotObjectDetection,
+    AutoProcessor,
+    AutoTokenizer,
     GroundingDino2Config,
     GroundingDino2ForObjectDetection,
     GroundingDino2Processor,
     GroundingDinoImageProcessor,
-    AutoTokenizer,
-    AutoProcessor,
     SchedulerType,
     get_scheduler,
 )
@@ -145,8 +143,9 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
         device = scores.device
         labels = prediction["labels"]
         for label in labels:
+            label = label.split('.')[0].replace(" ", "")
             if label in label2id:
-                torch_label.append(label)
+                torch_label.append(label2id[label])
             else:
                 # Give background class
                 torch_label.append(0)
@@ -287,7 +286,10 @@ def evaluation_loop(
             outputs, input_ids, box_threshold=0.15, text_threshold=0.1, target_sizes=image_size
         )
         predictions = nested_to_cpu(predictions)
-        predictions = convert_zero_shot_to_coco_format(predictions, label2id)
+        print({k.lower(): v for k, v in label2id.items()})
+        print(predictions)
+        predictions = convert_zero_shot_to_coco_format(predictions, {k.lower(): v for k, v in label2id.items()})
+        print(predictions)
 
         # 2. Collect ground truth boxes in the same format for metric computation
         # Do the same, convert YOLO boxes to Pascal VOC format
@@ -585,7 +587,7 @@ def main():
     )
     model.model.multimodal_backbone.from_pretrained("openai/clip-vit-base-patch32")
     image_processor = GroundingDinoImageProcessor()
-    tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch16")
+    tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
     processor = GroundingDino2Processor(image_processor, tokenizer)
 
     # Freeze both text_backbone

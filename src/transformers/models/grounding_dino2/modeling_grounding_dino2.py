@@ -19,6 +19,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from types import MethodType
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
@@ -39,6 +40,7 @@ from ...file_utils import (
     replace_return_docstrings,
     requires_backends,
 )
+from ...modeling_outputs import BaseModelOutputWithPooling
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import meshgrid
 from ...utils import is_accelerate_available, is_ninja_available, logging
@@ -2111,6 +2113,81 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
     return attention_masks, text_self_attention_masks, position_ids.to(torch.long)
 
 
+def monkey_patch_clip_text_model_forward(
+    self,
+    input_ids: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.Tensor] = None,
+    output_attentions: Optional[bool] = None,
+    output_hidden_states: Optional[bool] = None,
+    return_dict: Optional[bool] = None,
+) -> Union[Tuple, BaseModelOutputWithPooling]:
+    r"""
+    Returns:
+
+    """
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if input_ids is None:
+        raise ValueError("You have to specify input_ids")
+
+    input_shape = input_ids.size()
+    input_ids = input_ids.view(-1, input_shape[-1])
+
+    hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
+
+    # expand attention_mask
+    if attention_mask is not None and not self._use_flash_attention_2:
+        if attention_mask.dim() == 3:
+            attention_mask = attention_mask[:, None, :, :]
+
+    encoder_outputs = self.encoder(
+        inputs_embeds=hidden_states,
+        attention_mask=attention_mask,
+        causal_attention_mask=None,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+    )
+
+    last_hidden_state = encoder_outputs[0]
+    last_hidden_state = self.final_layer_norm(last_hidden_state)
+
+    if self.eos_token_id == 2:
+        # The `eos_token_id` was incorrect before PR #24773: Let's keep what have been done here.
+        # A CLIP model with such `eos_token_id` in the config can't work correctly with extra new tokens added
+        # ------------------------------------------------------------
+        # text_embeds.shape = [batch_size, sequence_length, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        # casting to torch.int for onnx compatibility: argmax doesn't support int64 inputs with opset 14
+        pooled_output = last_hidden_state[
+            torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
+            input_ids.to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),
+        ]
+    else:
+        # The config gets updated `eos_token_id` from PR #24773 (so the use of exta new tokens is possible)
+        pooled_output = last_hidden_state[
+            torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
+            # We need to get the first position of `eos_token_id` value (`pad_token_ids` might equal to `eos_token_id`)
+            # Note: we assume each sequence (along batch dim.) contains an  `eos_token_id` (e.g. prepared by the tokenizer)
+            (input_ids.to(dtype=torch.int, device=last_hidden_state.device) == self.eos_token_id).int().argmax(dim=-1),
+        ]
+
+    if not return_dict:
+        return (last_hidden_state, pooled_output) + encoder_outputs[1:]
+
+    return BaseModelOutputWithPooling(
+        last_hidden_state=last_hidden_state,
+        pooler_output=pooled_output,
+        hidden_states=encoder_outputs.hidden_states,
+        attentions=encoder_outputs.attentions,
+    )
+
+
 @add_start_docstrings(
     """
     The bare Grounding DINO 2 Model (consisting of a backbone and encoder-decoder Transformer) outputting raw
@@ -2163,6 +2240,11 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         self.multimodal_backbone = AutoModel.from_config(
             config.multimodal_config, attn_implementation=config._attn_implementation
         )
+        # Monkey patch custom CLIP backbone
+        self.multimodal_backbone.text_model.forward = MethodType(
+            monkey_patch_clip_text_model_forward, self.multimodal_backbone.text_model
+        )
+
         self.multimodal_projection = nn.Linear(config.multimodal_config.text_config.hidden_size, config.d_model)
 
         if config.embedding_init_target or not config.two_stage:
@@ -2336,7 +2418,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
 
         # Extract text features from text backbone
         multimodal_outputs = self.multimodal_backbone.text_model(
-            input_ids, attention_mask=attention_masks, position_ids=position_ids, return_dict=return_dict
+            input_ids, attention_mask=text_self_attention_masks, position_ids=position_ids, return_dict=return_dict
         )
         text_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
         text_features = self.multimodal_projection(text_features)
