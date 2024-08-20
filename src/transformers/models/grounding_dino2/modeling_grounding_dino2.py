@@ -41,6 +41,7 @@ from ...file_utils import (
     requires_backends,
 )
 from ...modeling_outputs import BaseModelOutputWithPooling
+from ...modeling_attn_mask_utils import _create_4d_causal_attention_mask
 from ...modeling_utils import PreTrainedModel
 from ...pytorch_utils import meshgrid
 from ...utils import is_accelerate_available, is_ninja_available, logging
@@ -2140,6 +2141,12 @@ def monkey_patch_clip_text_model_forward(
 
     hidden_states = self.embeddings(input_ids=input_ids, position_ids=position_ids)
 
+    # CLIP's text model uses causal mask, prepare it here.
+    # https://github.com/openai/CLIP/blob/cfcffb90e69f37bf2ff1e988237a0fbe41f33c04/clip/model.py#L324
+    causal_attention_mask = _create_4d_causal_attention_mask(
+        input_shape, hidden_states.dtype, device=hidden_states.device
+    )
+
     # expand attention_mask
     if attention_mask is not None and not self._use_flash_attention_2:
         if attention_mask.dim() == 3:
@@ -2148,7 +2155,7 @@ def monkey_patch_clip_text_model_forward(
     encoder_outputs = self.encoder(
         inputs_embeds=hidden_states,
         attention_mask=attention_mask,
-        causal_attention_mask=None,
+        causal_attention_mask=causal_attention_mask,
         output_attentions=output_attentions,
         output_hidden_states=output_hidden_states,
         return_dict=return_dict,

@@ -143,7 +143,7 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
         device = scores.device
         labels = prediction["labels"]
         for label in labels:
-            label = label.split('.')[0].replace(" ", "")
+            label = label.split('.')[0].split(' ')[0].replace(" ", "")
             if label in label2id:
                 torch_label.append(label2id[label])
             else:
@@ -286,8 +286,6 @@ def evaluation_loop(
             outputs, input_ids, box_threshold=0.15, text_threshold=0.1, target_sizes=image_size
         )
         predictions = nested_to_cpu(predictions)
-        print({k.lower(): v for k, v in label2id.items()})
-        print(predictions)
         predictions = convert_zero_shot_to_coco_format(predictions, {k.lower(): v for k, v in label2id.items()})
         print(predictions)
 
