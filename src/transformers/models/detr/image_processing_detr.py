@@ -1997,6 +1997,97 @@ class DetrImageProcessor(BaseImageProcessor):
             results.append({"segmentation": segmentation, "segments_info": segments})
         return results
 
+    def post_process_instance_segmentation_v2(
+        self,
+        outputs,
+        threshold: float = 0.5,
+        mask_threshold: float = 0.5,
+        overlap_mask_area_threshold: float = 0.8,
+        target_sizes: Optional[List[Tuple[int, int]]] = None,
+    ) -> List[Dict]:
+        """
+        Converts the output of [`DetrForSegmentation`] into instance segmentation predictions. Only supports PyTorch.
+
+        Args:
+            outputs ([`DetrForSegmentation`]):
+                Raw outputs of the model.
+            threshold (`float`, *optional*, defaults to 0.5):
+                The probability score threshold to keep predicted instance masks.
+            mask_threshold (`float`, *optional*, defaults to 0.5):
+                Threshold to use when turning the predicted masks into binary values.
+            overlap_mask_area_threshold (`float`, *optional*, defaults to 0.8):
+                The overlap mask area threshold to merge or discard small disconnected parts within each binary
+                instance mask.
+            target_sizes (`List[Tuple]`, *optional*):
+                List of length (batch_size), where each list item (`Tuple[int, int]]`) corresponds to the requested
+                final size (height, width) of each prediction. If unset, predictions will not be resized.
+            return_coco_annotation (`bool`, *optional*):
+                Defaults to `False`. If set to `True`, segmentation maps are returned in COCO run-length encoding (RLE)
+                format.
+            return_binary_maps (`bool`, *optional*, defaults to `False`):
+                If set to `True`, segmentation maps are returned as a concatenated tensor of binary segmentation maps
+                (one per detected instance).
+        Returns:
+            `List[Dict]`: A list of dictionaries, one per image, each dictionary containing two keys:
+            - **segmentation** -- A tensor of shape `(height, width)` where each pixel represents a `segment_id` or
+              `List[List]` run-length encoding (RLE) of the segmentation map if return_coco_annotation is set to
+              `True`. Set to `None` if no mask if found above `threshold`.
+            - **label_id** -- An integer representing the label / semantic class id corresponding to `segment_id`.
+            - **score** -- Prediction score of segment with `segment_id`.
+        """
+
+        # [batch_size, num_queries, num_classes+1]
+        class_queries_logits = outputs.logits
+        # [batch_size, num_queries, height, width]
+        masks_queries_logits = outputs.pred_masks
+
+        device = masks_queries_logits.device
+        num_classes = class_queries_logits.shape[-1] - 1
+        num_queries = class_queries_logits.shape[-2]
+
+        # Loop over items in batch size
+        results: List[Dict[str, TensorType]] = []
+
+        for i in range(class_queries_logits.shape[0]):
+            mask_pred = masks_queries_logits[i]
+            mask_cls = class_queries_logits[i]
+
+            scores = torch.nn.functional.softmax(mask_cls, dim=-1)[:, :-1]
+            labels = torch.arange(num_classes, device=device).unsqueeze(0).repeat(num_queries, 1).flatten(0, 1)
+
+            scores_per_image, topk_indices = scores.flatten(0, 1).topk(num_queries, sorted=False)
+            labels_per_image = labels[topk_indices]
+
+            topk_indices = torch.div(topk_indices, num_classes, rounding_mode="floor")
+            mask_pred = mask_pred[topk_indices]
+            pred_masks = (mask_pred > 0).float()
+
+            # Calculate average mask prob
+            mask_scores_per_image = (mask_pred.sigmoid().flatten(1) * pred_masks.flatten(1)).sum(1) / (
+                pred_masks.flatten(1).sum(1) + 1e-6
+            )
+            pred_scores = scores_per_image * mask_scores_per_image
+            pred_classes = labels_per_image
+
+            mask_pred, pred_scores, pred_classes = remove_low_and_no_objects(
+                mask_pred, pred_scores, pred_classes, threshold, num_classes
+            )
+
+            segmentation = torch.zeros((384, 384)) - 1
+            if target_sizes is not None:
+                size = target_sizes[i] if isinstance(target_sizes[i], tuple) else target_sizes[i].cpu().tolist()
+                segmentation = torch.zeros(size) - 1
+                pred_masks = torch.nn.functional.interpolate(pred_masks.unsqueeze(0), size=size, mode="nearest")[0]
+
+            keep = pred_scores > threshold
+
+            score = pred_scores[keep]
+            label = pred_classes[keep]
+            segmentation = pred_masks[keep]
+
+            results.append({"score": score, "label": label, "segmentation": segmentation})
+        return results
+
     # inspired by https://github.com/facebookresearch/detr/blob/master/models/segmentation.py#L241
     def post_process_panoptic_segmentation(
         self,

@@ -14,7 +14,6 @@
 # limitations under the License.
 """Image processor class for YOLOS."""
 
-import math
 import pathlib
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
