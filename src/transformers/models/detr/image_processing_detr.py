@@ -2083,7 +2083,7 @@ class DetrImageProcessor(BaseImageProcessor):
 
             score = pred_scores[keep]
             label = pred_classes[keep]
-            segmentation = pred_masks[keep]
+            segmentation = pred_masks[keep] > mask_threshold
 
             results.append({"score": score, "label": label, "segmentation": segmentation})
         return results
