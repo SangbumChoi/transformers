@@ -143,7 +143,7 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
         device = scores.device
         labels = prediction["labels"]
         for label in labels:
-            label = label.split('.')[0].split(' ')[0].replace(" ", "")
+            label = label.split(".")[0].split(" ")[0].replace(" ", "")
             if label in label2id:
                 torch_label.append(label2id[label])
             else:
@@ -160,6 +160,60 @@ def to_label_list(id2label):
 
 def concat_func(id2label):
     return ". ".join(to_label_list(id2label)) + "."
+
+
+def crop_bboxes(image, bboxes):
+    """
+    Crop bounding boxes from a PIL image.
+
+    Args:
+        image (PIL.Image.Image): The input PIL image from which to crop the bounding boxes.
+        bboxes (list of tuples): List of bounding boxes, where each bbox is represented as a tuple (x, y, w, h).
+
+    Returns:
+        list of PIL.Image.Image: List of cropped images corresponding to each bounding box.
+    """
+    cropped_images = []
+    for x, y, w, h in bboxes:
+        cropped_img = image[int(y) : int(y + h), int(x) : int(x + w)]
+        cropped_images.append(cropped_img)
+
+    return cropped_images
+
+
+def get_random_unique_indices(lst):
+    seen = {}
+    result = [False] * len(lst)
+
+    # Iterate through the list to collect all indices of each unique value
+    for i, value in enumerate(lst):
+        if value not in seen:
+            seen[value] = [i]
+        else:
+            seen[value].append(i)
+
+    # For each unique value, randomly select one index and mark it as True
+    for indices in seen.values():
+        random_index = random.choice(indices)
+        result[random_index] = True
+
+    return result
+
+
+def group_by_index(values, group_indices):
+    # Create a dictionary to hold the grouped values
+    grouped_dict = {}
+
+    # Iterate through the values and group_indices simultaneously
+    for value, group_index in zip(values, group_indices):
+        if group_index not in grouped_dict:
+            grouped_dict[group_index] = []
+        grouped_dict[group_index].append(value)
+
+    # Extract the groups in the order of their appearance
+    grouped_values = [grouped_dict[key] for key in sorted(grouped_dict.keys())]
+
+    return grouped_values
 
 
 def augment_and_transform_batch(
@@ -194,6 +248,7 @@ def augment_and_transform_batch(
     images = []
     annotations = []
     text = []
+    semantics = []
 
     for image_id, image, objects in zip(examples["image_id"], examples["image"], examples["objects"]):
         image = np.array(image.convert("RGB"))
@@ -225,8 +280,29 @@ def augment_and_transform_batch(
         annotations.append(formatted_annotations)
         text.append(prompt)
 
+    # Crop image with aggregated result
+    bbox = []
+    category = []
+    batch_index = []
+    for n, annotation in enumerate(annotations):
+        for anno in annotation["annotations"]:
+            bbox.append(anno["bbox"])
+            category.append(anno["category_id"])
+            batch_index.append(n)
+
+    bool_category = get_random_unique_indices(category)
+    bool_category = group_by_index(bool_category, batch_index)
+    bbox = group_by_index(bbox, batch_index)
+
+    for image, bool, box in zip(images, bool_category, bbox):
+        bboxes = []
+        for _bool, _box in zip(bool, box):
+            if _bool:
+                bboxes.append(_box)
+        semantics.extend(crop_bboxes(image, bboxes))
+
     # Apply the image processor transformations: resizing, rescaling, normalization
-    result = processor(images=images, text=text, annotations=annotations, return_tensors="pt")
+    result = processor(images=images, text=text, semantics=semantics, annotations=annotations, return_tensors="pt")
 
     if not return_pixel_mask:
         result.pop("pixel_mask", None)
@@ -287,7 +363,6 @@ def evaluation_loop(
         )
         predictions = nested_to_cpu(predictions)
         predictions = convert_zero_shot_to_coco_format(predictions, {k.lower(): v for k, v in label2id.items()})
-        print(predictions)
 
         # 2. Collect ground truth boxes in the same format for metric computation
         # Do the same, convert YOLO boxes to Pascal VOC format

@@ -109,17 +109,19 @@ class GroundingDino2Processor(ProcessorMixin):
             An instance of ['PreTrainedTokenizer`]. The tokenizer is a required input.
     """
 
-    attributes = ["image_processor", "tokenizer"]
+    attributes = ["image_processor", "tokenizer", "semantic_processor"]
     image_processor_class = "GroundingDinoImageProcessor"
     tokenizer_class = "AutoTokenizer"
+    semantic_processor_class = "CLIPImageProcessor"
 
-    def __init__(self, image_processor, tokenizer):
-        super().__init__(image_processor, tokenizer)
+    def __init__(self, image_processor, tokenizer, semantic_processor):
+        super().__init__(image_processor, tokenizer, semantic_processor)
 
     def __call__(
         self,
         images: ImageInput = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
+        semantics: ImageInput = None,
         audio=None,
         videos=None,
         **kwargs: Unpack[GroundingDino2ProcessorKwargs],
@@ -130,7 +132,7 @@ class GroundingDino2Processor(ProcessorMixin):
 
         Please refer to the docstring of the above two methods for more information.
         """
-        if images is None and text is None:
+        if images is None and (text is None or semantics is None):
             raise ValueError("You must specify either text or images.")
 
         output_kwargs = self._merge_kwargs(
@@ -154,6 +156,19 @@ class GroundingDino2Processor(ProcessorMixin):
             text_encoding = BatchEncoding()
 
         text_encoding.update(encoding_image_processor)
+
+        if semantics is not None:
+            semantic_encoding = self.semantic_processor(
+                images=semantics,
+                **output_kwargs["images_kwargs"],
+            )
+        else:
+            semantic_encoding = BatchEncoding()
+
+        if "pixel_values" in semantic_encoding:
+            semantic_encoding["input_semantics"] = semantic_encoding.pop("pixel_values")
+
+        text_encoding.update(semantic_encoding)
 
         return text_encoding
 
