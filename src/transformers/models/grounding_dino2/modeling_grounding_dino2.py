@@ -846,14 +846,15 @@ class GroundingDino2TextEnhancerLayer(nn.Module):
         """
 
         # repeat attn mask
-        if attention_masks.dim() == 3 and attention_masks.shape[0] == hidden_states.shape[0]:
-            # batch_size, num_queries, num_keys
-            attention_masks = attention_masks[:, None, :, :]
-            attention_masks = attention_masks.repeat(1, self.num_heads, 1, 1)
+        if attention_masks is not None:
+            if attention_masks.dim() == 3 and attention_masks.shape[0] == hidden_states.shape[0]:
+                # batch_size, num_queries, num_keys
+                attention_masks = attention_masks[:, None, :, :]
+                attention_masks = attention_masks.repeat(1, self.num_heads, 1, 1)
 
-            dtype = hidden_states.dtype
-            attention_masks = attention_masks.to(dtype=dtype)  # fp16 compatibility
-            attention_masks = (1.0 - attention_masks) * torch.finfo(dtype).min
+                dtype = hidden_states.dtype
+                attention_masks = attention_masks.to(dtype=dtype)  # fp16 compatibility
+                attention_masks = (1.0 - attention_masks) * torch.finfo(dtype).min
 
         queries = keys = self.with_pos_embed(hidden_states, position_embeddings)
         attention_output, attention_weights = self.self_attn(
@@ -915,9 +916,11 @@ class GroundingDino2BiMultiHeadAttention(nn.Module):
     def forward(
         self,
         vision_features: torch.FloatTensor,
-        text_features: torch.FloatTensor,
+        text_features: Optional[torch.FloatTensor] = None,
+        semantic_features: Optional[torch.FloatTensor] = None,
         vision_attention_mask: Optional[torch.BoolTensor] = None,
         text_attention_mask: Optional[torch.BoolTensor] = None,
+        semantic_attention_mask: Optional[torch.BoolTensor] = None,
     ) -> Tuple[Tuple[torch.FloatTensor, torch.FloatTensor], Tuple[torch.FloatTensor, torch.FloatTensor]]:
         """Image-to-text and text-to-image cross-attention
 
@@ -947,6 +950,9 @@ class GroundingDino2BiMultiHeadAttention(nn.Module):
                 Attention weights of the text-to-image cross-attention layer.
         """
         batch_size, tgt_len, _ = vision_features.size()
+
+        if text_features is None:
+            text_features = semantic_features
 
         vision_query_states = self.vision_proj(vision_features) * self.scale
         vision_query_states = self._reshape(vision_query_states, tgt_len, batch_size)
@@ -1027,7 +1033,11 @@ class GroundingDino2BiMultiHeadAttention(nn.Module):
         vision_attn_output = self.out_vision_proj(vision_attn_output)
         text_attn_output = self.out_text_proj(text_attn_output)
 
-        return (vision_attn_output, vision_attn_weights), (text_attn_output, text_attn_weights)
+        return (
+            (vision_attn_output, vision_attn_weights),
+            (text_attn_output, text_attn_weights),
+            (text_attn_output, text_attn_weights),
+        )
 
 
 # Copied from transformers.models.beit.modeling_beit.drop_path
@@ -1075,6 +1085,7 @@ class GroundingDino2FusionLayer(nn.Module):
         # pre layer norm
         self.layer_norm_vision = nn.LayerNorm(config.d_model, config.layer_norm_eps)
         self.layer_norm_text = nn.LayerNorm(config.d_model, config.layer_norm_eps)
+        self.layer_norm_semantic = nn.LayerNorm(config.d_model, config.layer_norm_eps)
         self.attn = GroundingDino2BiMultiHeadAttention(config)
 
         # add layer scale for training stability
@@ -1082,13 +1093,15 @@ class GroundingDino2FusionLayer(nn.Module):
         init_values = 1e-4
         self.vision_param = nn.Parameter(init_values * torch.ones((config.d_model)), requires_grad=True)
         self.text_param = nn.Parameter(init_values * torch.ones((config.d_model)), requires_grad=True)
+        self.semantic_param = nn.Parameter(init_values * torch.ones((config.d_model)), requires_grad=True)
 
     def forward(
         self,
         vision_features: torch.FloatTensor,
-        text_features: torch.FloatTensor,
+        text_features: Optional[torch.FloatTensor] = None,
         attention_mask_vision: Optional[torch.BoolTensor] = None,
         attention_mask_text: Optional[torch.BoolTensor] = None,
+        semantic_features: Optional[torch.FloatTensor] = None,
     ) -> Tuple[Tuple[torch.FloatTensor, torch.FloatTensor], Tuple[torch.FloatTensor, torch.FloatTensor]]:
         """Image and text features fusion
 
@@ -1117,17 +1130,27 @@ class GroundingDino2FusionLayer(nn.Module):
                 Attention weights of the text-to-image cross-attention layer.
         """
         vision_features = self.layer_norm_vision(vision_features)
-        text_features = self.layer_norm_text(text_features)
-        (delta_v, vision_attn), (delta_t, text_attn) = self.attn(
+        if text_features is not None:
+            text_features = self.layer_norm_text(text_features)
+
+        if semantic_features is not None:
+            semantic_features = self.layer_norm_semantic(semantic_features)
+
+        (delta_v, vision_attn), (delta_t, text_attn), (delta_s, semantic_attn) = self.attn(
             vision_features,
-            text_features,
+            text_features=text_features,
             vision_attention_mask=attention_mask_vision,
             text_attention_mask=attention_mask_text,
+            semantic_features=semantic_features,
         )
         vision_features = vision_features + self.drop_path(self.vision_param * delta_v)
-        text_features = text_features + self.drop_path(self.text_param * delta_t)
+        if text_features is not None:
+            text_features = text_features + self.drop_path(self.text_param * delta_t)
 
-        return (vision_features, vision_attn), (text_features, text_attn)
+        if semantic_features is not None:
+            semantic_features = semantic_features + self.drop_path(self.semantic_param * delta_s)
+
+        return (vision_features, vision_attn), (text_features, text_attn), (semantic_features, semantic_attn)
 
 
 # Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoDeformableLayer with GroundingDino->GroundingDino2
@@ -1265,6 +1288,8 @@ class GroundingDino2EncoderLayer(nn.Module):
         text_position_embedding: Optional[torch.Tensor],
         text_position_ids: Optional[torch.Tensor],
     ) -> Tensor:
+        if text_features is None:
+            return None
         batch_size, seq_length, _ = text_features.shape
         if text_position_embedding is None and text_position_ids is None:
             text_position_embedding = torch.arange(seq_length, device=text_features.device)
@@ -1294,21 +1319,28 @@ class GroundingDino2EncoderLayer(nn.Module):
         text_position_embedding: Optional[Tensor] = None,
         text_self_attention_masks: Optional[Tensor] = None,
         text_position_ids: Optional[Tensor] = None,
+        semantic_features: Optional[Tensor] = None,
     ):
         text_position_embedding = self.get_text_position_embeddings(
             text_features, text_position_embedding, text_position_ids
         )
 
-        (vision_features, vision_fused_attn), (text_features, text_fused_attn) = self.fusion_layer(
+        (
+            (vision_features, vision_fused_attn),
+            (text_features, text_fused_attn),
+            (semantic_features, semantic_fused_attn),
+        ) = self.fusion_layer(
             vision_features=vision_features,
             text_features=text_features,
+            semantic_features=semantic_features,
             attention_mask_vision=key_padding_mask,
             attention_mask_text=text_attention_mask,
         )
 
         (text_features, text_enhanced_attn) = self.text_enhancer_layer(
             hidden_states=text_features,
-            attention_masks=~text_self_attention_masks,  # note we use ~ for mask here
+            # attention_masks=~text_self_attention_masks,  # note we use ~ for mask here
+            attention_masks=None,  # note we use ~ for mask here
             position_embeddings=(text_position_embedding if text_position_embedding is not None else None),
         )
 
@@ -1733,7 +1765,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         text_position_embedding: Optional[Tensor] = None,
         text_self_attention_masks: Optional[Tensor] = None,
         text_position_ids: Optional[Tensor] = None,
-        visual_features: Optional[Tensor] = None,
+        semantic_features: Optional[Tensor] = None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -1770,6 +1802,8 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
                 - 0 for text features that are padding (i.e. **masked**).
             text_position_ids (`torch.LongTensor` of shape `(batch_size, num_queries)`):
                 Position ids for text features.
+            semantic_features (`torch.FloatTensor` of shape `(batch_size, semantic_seq_len, hidden_size)`):
+                Semantic features that are passed to the encoder.
             output_attentions (`bool`, *optional*):
                 Whether or not to return the attentions tensors of all attention layers. See `attentions` under
                 returned tensors for more detail.
@@ -1789,6 +1823,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
 
         encoder_vision_states = () if output_hidden_states else None
         encoder_text_states = () if output_hidden_states else None
+        encoder_semantic_states = () if output_hidden_states else None
         all_attns = () if output_attentions else None
         all_attn_fused_text = () if output_attentions else None
         all_attn_fused_vision = () if output_attentions else None
@@ -1798,8 +1833,9 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
             if output_hidden_states:
                 encoder_vision_states += (vision_features,)
                 encoder_text_states += (text_features,)
+                encoder_semantic_states += (semantic_features,)
 
-            (vision_features, text_features), attentions = encoder_layer(
+            (vision_features, text_features, semantic_features), attentions = encoder_layer(
                 vision_features=vision_features,
                 vision_position_embedding=vision_position_embedding,
                 spatial_shapes=spatial_shapes,
@@ -1811,6 +1847,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
                 text_position_embedding=text_position_embedding,
                 text_self_attention_masks=text_self_attention_masks,
                 text_position_ids=text_position_ids,
+                semantic_features=semantic_features,
             )
 
             if output_attentions:
@@ -1822,18 +1859,29 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         if output_hidden_states:
             encoder_vision_states += (vision_features,)
             encoder_text_states += (text_features,)
+            encoder_semantic_states += (semantic_features,)
 
         if output_attentions:
             all_attns = (all_attn_fused_vision, all_attn_fused_text, all_attn_enhanced_text, all_attn_deformable)
 
         if not return_dict:
-            enc_outputs = [vision_features, text_features, encoder_vision_states, encoder_text_states, all_attns]
+            enc_outputs = [
+                vision_features,
+                text_features,
+                semantic_features,
+                encoder_vision_states,
+                encoder_text_states,
+                encoder_semantic_states,
+                all_attns,
+            ]
             return tuple(v for v in enc_outputs if v is not None)
         return GroundingDino2EncoderOutput(
             last_hidden_state_vision=vision_features,
             last_hidden_state_text=text_features,
+            last_hidden_state_semantic=semantic_features,
             vision_hidden_states=encoder_vision_states,
             text_hidden_states=encoder_text_states,
+            semantic_hidden_states=encoder_semantic_states,
             attentions=all_attns,
         )
 
@@ -2258,7 +2306,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         self.multimodal_backbone = AutoModel.from_config(
             config.multimodal_config, attn_implementation=config._attn_implementation
         )
-        # Monkey patch custom CLIP backbone
+        # Monkey patch custom CLIP backbone (deprecated)
         self.multimodal_backbone.text_model.forward = MethodType(
             monkey_patch_clip_text_model_forward, self.multimodal_backbone.text_model
         )
@@ -2375,10 +2423,9 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         self,
         pixel_values: Tensor,
         input_ids: Optional[Tensor] = None,
-        input_semantics: Optional[Tensor] = None,
         token_type_ids: Optional[Tensor] = None,
         attention_mask: Optional[Tensor] = None,
-        visual_prompts: Optional[Tensor] = None,
+        input_semantics: Optional[Tensor] = None,
         pixel_mask: Optional[Tensor] = None,
         encoder_outputs=None,
         output_attentions=None,
@@ -2444,12 +2491,17 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             text_features = self.multimodal_projection(text_features)
         else:
             text_features = None
+            text_token_mask = False
+            text_self_attention_masks = False
+            position_ids = None
 
         if input_semantics is not None:
             # Extract vision features from vision backbone
+            # Semantic_features are of shape (batch_size, patch_size*patch_size + 1, hidden_state_dim), e.g. (5, 50, 768)
             multimodal_outputs = self.multimodal_backbone.vision_model(input_semantics, return_dict=return_dict)
             semantic_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
-            semantic_features = self.multimodal_projection(semantic_features)
+            # Giving input to [CLS] token index only
+            semantic_features = self.multimodal_projection(semantic_features[:, :1, :])
         else:
             semantic_features = None
 
@@ -2525,9 +2577,9 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
                 text_features=text_features,
-                text_attention_mask=~text_token_mask,
+                text_attention_mask=None,
                 text_position_embedding=None,
-                text_self_attention_masks=~text_self_attention_masks,
+                text_self_attention_masks=None,
                 text_position_ids=position_ids,
                 semantic_features=semantic_features,
                 output_attentions=output_attentions,
@@ -3066,7 +3118,7 @@ class GroundingDino2Loss(nn.Module):
         return losses
 
 
-def build_label_maps(logits, input_ids):
+def build_label_maps(logits, input_ids, input_semantics):
     """
     Computes a mapping between the tokens associated with the prompt labels in the logit space with shape `(batch_size, num_labels, hidden_size)`
     where `num_labels` is defined by the number of classes in the input prompt.
@@ -3164,10 +3216,10 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
     def forward(
         self,
         pixel_values: torch.FloatTensor,
-        input_ids: torch.LongTensor,
-        input_semantics: torch.FloatTensor = None,
+        input_ids: torch.LongTensor = None,
         token_type_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
+        input_semantics: torch.FloatTensor = None,
         pixel_mask: Optional[torch.BoolTensor] = None,
         encoder_outputs: Optional[Union[GroundingDino2EncoderOutput, Tuple]] = None,
         output_attentions: Optional[bool] = None,
@@ -3221,9 +3273,9 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         outputs = self.model(
             pixel_values=pixel_values,
             input_ids=input_ids,
-            input_semantics=input_semantics,
             token_type_ids=token_type_ids,
             attention_mask=attention_mask,
+            input_semantics=input_semantics,
             pixel_mask=pixel_mask,
             encoder_outputs=encoder_outputs,
             output_attentions=output_attentions,
@@ -3289,7 +3341,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
                 losses=losses,
             )
             criterion.to(self.device)
-            label_maps = build_label_maps(logits, input_ids)
+            label_maps = build_label_maps(logits, input_ids, input_semantics)
             text_mask = build_text_mask(logits, attention_mask)
             # Third: compute the losses, based on outputs and labels
             outputs_loss = {}
