@@ -199,15 +199,13 @@ class GroundingDino2EncoderOutput(ModelOutput):
     Args:
         last_hidden_state_vision (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
             Sequence of hidden-states at the output of the last layer of the vision encoder.
-        last_hidden_state_text (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
-            Sequence of hidden-states at the output of the last layer of the vision-text encoder.
-        last_hidden_state_semantic (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+        last_hidden_state_multimodal (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
             Sequence of hidden-states at the output of the last layer of the vision-text encoder.
         vision_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
             Tuple of `torch.FloatTensor` (one for the output of the vision embeddings + one for the output of each
             layer) of shape `(batch_size, sequence_length, hidden_size)`. Hidden-states of the vision encoder at the
             output of each layer plus the initial embedding outputs.
-        text_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
+        multimodal_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
             Tuple of `torch.FloatTensor` (one for the output of the text embeddings + one for the output of each layer)
             of shape `(batch_size, sequence_length, hidden_size)`. Hidden-states of the text encoder at the output of
             each layer plus the initial embedding outputs.
@@ -1862,6 +1860,8 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
                 all_attns,
             ]
             return tuple(v for v in enc_outputs if v is not None)
+        print('vision_features', vision_features.shape)
+        print('multimodal_features', multimodal_features.shape)
         return GroundingDino2EncoderOutput(
             last_hidden_state_vision=vision_features,
             last_hidden_state_multimodal=multimodal_features,
