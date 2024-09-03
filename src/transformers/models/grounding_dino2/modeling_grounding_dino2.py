@@ -197,9 +197,9 @@ class GroundingDino2EncoderOutput(ModelOutput):
     - vision and text intermediate hidden states
 
     Args:
-        last_hidden_state_vision (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+        last_hidden_state_vision (`torch.FloatTensor` of shape `(batch_size, vision_sequence_length, hidden_size)`):
             Sequence of hidden-states at the output of the last layer of the vision encoder.
-        last_hidden_state_multimodal (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
+        last_hidden_state_multimodal (`torch.FloatTensor` of shape `(batch_size, multimodal_sequence_length, hidden_size)`):
             Sequence of hidden-states at the output of the last layer of the vision-text encoder.
         vision_hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
             Tuple of `torch.FloatTensor` (one for the output of the vision embeddings + one for the output of each
@@ -2296,7 +2296,8 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             monkey_patch_clip_text_model_forward, self.multimodal_backbone.text_model
         )
 
-        self.multimodal_projection = nn.Linear(config.multimodal_config.vision_config.hidden_size, config.d_model)
+        self.text_projection = nn.Linear(config.multimodal_config.text_config.hidden_size, config.d_model)
+        self.semantic_projection = nn.Linear(config.multimodal_config.vision_config.hidden_size, config.d_model)
 
         if config.embedding_init_target or not config.two_stage:
             self.query_position_embeddings = nn.Embedding(config.num_queries, config.d_model)
@@ -2473,9 +2474,10 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
                 input_ids, attention_mask=text_self_attention_masks, position_ids=position_ids, return_dict=return_dict
             )
             text_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
-            text_features = self.multimodal_projection(text_features)
+            text_features = self.text_projection(text_features)
+            print(text_token_mask.shape, text_self_attention_masks.shape, position_ids.shape)
         else:
-            # TO DO: change this
+            # TO DO: change this to accept both text and semantic features
             text_features = None
             text_token_mask = None
             text_self_attention_masks = False
@@ -2487,11 +2489,13 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             multimodal_outputs = self.multimodal_backbone.vision_model(input_semantics, return_dict=return_dict)
             semantic_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
             # Giving input to [CLS] token index only
-            semantic_features = self.multimodal_projection(semantic_features[:, :1, :])
+            semantic_features = self.semantic_projection(semantic_features[:, :1, :])
             # Make (semantic_length, 1, hidden_size) to (1, semantic_length, hidden_size)
             semantic_features = semantic_features.transpose(0, 1)
         else:
             semantic_features = None
+
+        print("GroundingDino2Model text and semantic features shape", text_features.shape, semantic_features.shape)
 
         batch_size, num_channels, height, width = pixel_values.shape
         device = pixel_values.device
