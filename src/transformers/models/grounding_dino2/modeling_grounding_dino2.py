@@ -1537,11 +1537,11 @@ class GroundingDino2ContrastiveEmbedding(nn.Module):
         self,
         vision_hidden_state: torch.FloatTensor,
         multimodal_hidden_state: Optional[torch.FloatTensor] = None,
-        text_token_mask: Optional[torch.BoolTensor] = None,
+        multimodal_mask: Optional[torch.BoolTensor] = None,
     ) -> torch.FloatTensor:
         output = vision_hidden_state @ multimodal_hidden_state.transpose(-1, -2)
-        if text_token_mask is not None:
-            output = output.masked_fill(~text_token_mask[:, None, :], float("-inf"))
+        if multimodal_mask is not None:
+            output = output.masked_fill(~multimodal_mask[:, None, :], float("-inf"))
 
         # padding to max_text_len
         new_output = torch.full((*output.shape[:-1], self.max_text_len), float("-inf"), device=output.device)
@@ -1734,12 +1734,11 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         spatial_shapes: Tensor,
         level_start_index: Tensor,
         valid_ratios=None,
-        text_features: Optional[Tensor] = None,
+        multimodal_features: Optional[Tensor] = None,
         text_attention_mask: Optional[Tensor] = None,
         text_position_embedding: Optional[Tensor] = None,
         text_self_attention_masks: Optional[Tensor] = None,
         text_position_ids: Optional[Tensor] = None,
-        semantic_features: Optional[Tensor] = None,
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
@@ -1794,8 +1793,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # TO DO: make combination
-        multimodal_features = semantic_features if semantic_features is not None else text_features
-        print("semantic_features shape", semantic_features.shape)
+        print("multimodal_features shape", multimodal_features.shape)
 
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=vision_features.device)
 
@@ -1860,8 +1858,8 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
                 all_attns,
             ]
             return tuple(v for v in enc_outputs if v is not None)
-        print('vision_features', vision_features.shape)
-        print('multimodal_features', multimodal_features.shape)
+        print("vision_features", vision_features.shape)
+        print("multimodal_features", multimodal_features.shape)
         return GroundingDino2EncoderOutput(
             last_hidden_state_vision=vision_features,
             last_hidden_state_multimodal=multimodal_features,
@@ -2137,25 +2135,43 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
     text_self_attention_masks = (
         torch.eye(num_token, device=input_ids.device).bool().unsqueeze(0).repeat(batch_size, 1, 1)
     )
-    attention_masks = torch.zeros((batch_size, num_token), device=input_ids.device)
     position_ids = torch.zeros((batch_size, num_token), device=input_ids.device)
     previous_col = 0
     for i in range(idxs.shape[0]):
         row, col = idxs[i]
         if (col == 0) or (col == num_token - 1):
             text_self_attention_masks[row, col, col] = True
-            attention_masks[row, col] = False
             position_ids[row, col] = 0
         else:
             text_self_attention_masks[row, previous_col + 1 : col + 1, previous_col + 1 : col + 1] = True
-            attention_masks[row, previous_col + 2 : col + 1] = True
             position_ids[row, previous_col + 1 : col + 1] = torch.arange(
                 0, col - previous_col, device=input_ids.device
             )
 
         previous_col = col
 
-    return attention_masks, text_self_attention_masks, position_ids.to(torch.long)
+    return text_self_attention_masks, position_ids.to(torch.long)
+
+
+def generate_masks_with_input_semantics(batch_size: int, input_semantics: torch.FloatTensor) -> Tuple[Tensor, Tensor]:
+    """Generate attention mask between each pair of special tokens and positional ids.
+    Args:
+        input_semantics (`torch.FloatTensor` of shape `(semantic_length, 3, width, height)`):
+            Indices of input semantics after image processor.
+    Returns:
+        `tuple(torch.Tensor)` comprising attention mask between each special tokens and position_ids:
+        - **attention_mask** (`torch.BoolTensor` of shape `(batch_size, sequence_length)`)
+        - **position_ids** (`torch.LongTensor` of shape `(batch_size, sequence_length)`)
+    """
+    num_semantic, _, width, height = input_semantics.shape
+
+    # generate attention mask and positional ids
+    semantic_self_attention_masks = (
+        torch.eye(num_semantic, device=input_semantics.device).bool().unsqueeze(0).repeat(batch_size, 1, 1)
+    )
+    position_ids = torch.zeros((batch_size, num_semantic), device=input_semantics.device)
+
+    return semantic_self_attention_masks, position_ids.to(torch.long)
 
 
 def monkey_patch_clip_text_model_forward(
@@ -2448,57 +2464,69 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        batch_size, num_channels, height, width = pixel_values.shape
+        device = pixel_values.device
+
         if input_ids is not None:
-            attention_masks, text_self_attention_masks, position_ids = (
-                generate_masks_with_special_tokens_and_transfer_map(input_ids)
+            # Workaround is applied by monkey-patch to enable text_self_attention_masks
+            text_self_attention_masks, text_position_ids = generate_masks_with_special_tokens_and_transfer_map(
+                input_ids
             )
 
-            if attention_mask is None:
-                attention_mask = torch.ones_like(input_ids)
-
-            # if token_type_ids is None:
-            #     token_type_ids = torch.zeros_like(input_ids)
-
-            text_token_mask = attention_mask.bool()  # just to avoid renaming everywhere
+            # TO DO: merge this with semantic_token_mask
+            text_attention_mask = torch.ones_like(input_ids)
+            text_token_mask = text_attention_mask.bool()  # just to avoid renaming everywhere
 
             max_text_len = self.config.max_text_len
             if text_self_attention_masks.shape[1] > max_text_len:
                 text_self_attention_masks = text_self_attention_masks[:, :max_text_len, :max_text_len]
-                position_ids = position_ids[:, :max_text_len]
+                text_position_ids = text_position_ids[:, :max_text_len]
                 input_ids = input_ids[:, :max_text_len]
-                # token_type_ids = token_type_ids[:, :max_text_len]
-                text_token_mask = text_token_mask[:, :max_text_len]
 
             # Extract text features from text backbone
             multimodal_outputs = self.multimodal_backbone.text_model(
-                input_ids, attention_mask=text_self_attention_masks, position_ids=position_ids, return_dict=return_dict
+                input_ids,
+                attention_mask=text_self_attention_masks,
+                position_ids=text_position_ids,
+                return_dict=return_dict,
             )
             text_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
+            # Text_features are shape of (batch_size, sequence_lenght, hidden_dim)
             text_features = self.text_projection(text_features)
-            print(text_token_mask.shape, text_self_attention_masks.shape, position_ids.shape)
-        else:
-            # TO DO: change this to accept both text and semantic features
-            text_features = None
-            text_token_mask = None
-            text_self_attention_masks = False
-            position_ids = None
 
         if input_semantics is not None:
-            # Extract vision features from vision backbone
-            # Semantic_features are of shape (batch_size, patch_size*patch_size + 1, hidden_state_dim), e.g. (5, 50, 768)
+            semantic_self_attention_masks, semantic_position_ids = generate_masks_with_input_semantics(
+                batch_size, input_semantics
+            )
+            # Extract semantic features from CLIP backbone
+            # Semantic_features are shape of (batch_size, patch_size*patch_size + 1, hidden_state_dim), e.g. (5, 50, 768)
             multimodal_outputs = self.multimodal_backbone.vision_model(input_semantics, return_dict=return_dict)
             semantic_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
             # Giving input to [CLS] token index only
             semantic_features = self.semantic_projection(semantic_features[:, :1, :])
-            # Make (semantic_length, 1, hidden_size) to (1, semantic_length, hidden_size)
-            semantic_features = semantic_features.transpose(0, 1)
+            # Make (semantic_length, 1, hidden_size) to (batch_size, semantic_length, hidden_dim)
+            semantic_features = semantic_features.transpose(0, 1).expand(batch_size, -1, -1)
+
+        if input_ids is not None and input_semantics is not None:
+            print("GroundingDino2Model text and semantic features shape", text_features.shape, semantic_features.shape)
+            # Multimodal_features are shape of (batch_size, text_length + semantic_lenght, hidden_dim)
+            multimodal_features = torch.cat([text_features, semantic_features], dim=1)
+            # TO DO: change this to accept both text and semantic features
+            multimodal_mask = None
+            multimodal_self_attention_masks = None
+            position_ids = torch.cat([text_position_ids, semantic_position_ids], dim=1)
+        elif input_ids is not None:
+            multimodal_features = text_features
+            multimodal_mask = text_token_mask
+            multimodal_self_attention_masks = text_self_attention_masks
+            position_ids = text_position_ids
+        elif input_semantics is not None:
+            multimodal_features = semantic_features
+            multimodal_mask = None
+            multimodal_self_attention_masks = semantic_self_attention_masks
+            position_ids = semantic_position_ids
         else:
-            semantic_features = None
-
-        print("GroundingDino2Model text and semantic features shape", text_features.shape, semantic_features.shape)
-
-        batch_size, num_channels, height, width = pixel_values.shape
-        device = pixel_values.device
+            raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
 
         if pixel_mask is None:
             pixel_mask = torch.ones(((batch_size, height, width)), dtype=torch.long, device=device)
@@ -2568,12 +2596,11 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
                 spatial_shapes=spatial_shapes,
                 level_start_index=level_start_index,
                 valid_ratios=valid_ratios,
-                text_features=text_features,
+                multimodal_features=multimodal_features,
                 text_attention_mask=None,
                 text_position_embedding=None,
-                text_self_attention_masks=None,
+                text_self_attention_masks=multimodal_self_attention_masks,
                 text_position_ids=position_ids,
-                semantic_features=semantic_features,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
@@ -2605,7 +2632,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             enc_outputs_class = self.encoder_output_class_embed(
                 object_query_embedding,
                 encoder_outputs[1],
-                text_token_mask,
+                multimodal_mask,
             )
             # 3-layer FFN to predict bounding boxes coordinates (bbox regression branch)
             delta_bbox = self.encoder_output_bbox_embed(object_query_embedding)
@@ -2631,10 +2658,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
 
             # Set intermediate topk proposals (coords and class) for loss computation
             encoder_pred_boxes = reference_points
-            if input_ids is not None:
-                encoder_logits = self.encoder_output_class_embed(target, text_features, text_token_mask)
-            else:
-                encoder_logits = self.encoder_output_class_embed(target, semantic_features, text_token_mask)
+            encoder_logits = self.encoder_output_class_embed(target, multimodal_features, multimodal_mask)
         else:
             target = query_embeds.unsqueeze(0).repeat(batch_size, 1, 1)
             reference_points = self.reference_points.weight.unsqueeze(0).repeat(batch_size, 1, 1).sigmoid()
@@ -2646,7 +2670,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             vision_encoder_attention_mask=mask_flatten,
             text_encoder_hidden_states=encoder_outputs[1],
             text_encoder_attention_mask=None,
-            # text_encoder_attention_mask=~text_token_mask,
+            # text_encoder_attention_mask=~multimodal_mask,
             reference_points=reference_points,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
@@ -3302,7 +3326,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
             outputs_class = self.class_embed[level](
                 vision_hidden_state=hidden_states[:, level],
                 multimodal_hidden_state=enc_multimodal_hidden_state,
-                text_token_mask=None,
+                multimodal_mask=None,
                 # TO DO: make this attention
                 # text_token_mask=attention_mask.bool(),
             )

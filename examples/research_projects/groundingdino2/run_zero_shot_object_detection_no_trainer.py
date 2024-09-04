@@ -41,6 +41,7 @@ import transformers
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
+    CLIPImageProcessor,
     GroundingDino2Config,
     GroundingDino2ForObjectDetection,
     GroundingDino2Processor,
@@ -148,7 +149,7 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
                 torch_label.append(label2id[label])
             else:
                 # Give background class
-                torch_label.append(0)
+                torch_label.append(-1)
         prediction["labels"] = torch.Tensor(torch_label).to(dtype=torch.int32).to(device)
 
     return predictions
@@ -372,7 +373,7 @@ def evaluation_loop(
             boxes = convert_bbox_yolo_to_pascal(label["boxes"], label["orig_size"])
             labels = label["class_labels"]
             target.append({"boxes": boxes, "labels": labels})
-
+        print(target[0]["labels"])
         metric.update(predictions, target)
 
     metrics = metric.compute()
@@ -661,7 +662,8 @@ def main():
     model.model.multimodal_backbone.from_pretrained("openai/clip-vit-base-patch32")
     image_processor = GroundingDinoImageProcessor()
     tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-    processor = GroundingDino2Processor(image_processor, tokenizer)
+    semantic_processor = CLIPImageProcessor()
+    processor = GroundingDino2Processor(image_processor, tokenizer, semantic_processor)
 
     # Freeze both text_backbone
     if args.freeze_backbone:
@@ -722,8 +724,8 @@ def main():
     )
 
     with accelerator.main_process_first():
-        train_dataset = dataset["train"].with_transform(train_transform_batch)
-        valid_dataset = dataset["validation"].with_transform(validation_transform_batch)
+        train_dataset = dataset["test"].with_transform(train_transform_batch)
+        valid_dataset = dataset["test"].with_transform(validation_transform_batch)
         test_dataset = dataset["test"].with_transform(validation_transform_batch)
 
     dataloader_common_args = {
