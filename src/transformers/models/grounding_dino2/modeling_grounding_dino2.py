@@ -1131,7 +1131,6 @@ class GroundingDino2FusionLayer(nn.Module):
             multimodal_attention_mask=None,
         )
         vision_features = vision_features + self.drop_path(self.vision_param * delta_v)
-        print(vision_features.shape, multimodal_features.shape, self.multimodal_param.shape)
         multimodal_features = multimodal_features + self.drop_path(self.multimodal_param * delta_m)
 
         return (vision_features, vision_attn), (multimodal_features, multimodal_attn)
@@ -1792,9 +1791,6 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        # TO DO: make combination
-        print("multimodal_features shape", multimodal_features.shape)
-
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=vision_features.device)
 
         encoder_vision_states = () if output_hidden_states else None
@@ -1858,8 +1854,7 @@ class GroundingDino2Encoder(GroundingDino2PreTrainedModel):
                 all_attns,
             ]
             return tuple(v for v in enc_outputs if v is not None)
-        print("vision_features", vision_features.shape)
-        print("multimodal_features", multimodal_features.shape)
+
         return GroundingDino2EncoderOutput(
             last_hidden_state_vision=vision_features,
             last_hidden_state_multimodal=multimodal_features,
@@ -2491,7 +2486,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
                 return_dict=return_dict,
             )
             text_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
-            # Text_features are shape of (batch_size, sequence_lenght, hidden_dim)
+            # Text_features are shape of (batch_size, sequence_length, hidden_dim)
             text_features = self.text_projection(text_features)
 
         if input_semantics is not None:
@@ -2508,12 +2503,22 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             semantic_features = semantic_features.transpose(0, 1).expand(batch_size, -1, -1)
 
         if input_ids is not None and input_semantics is not None:
-            print("GroundingDino2Model text and semantic features shape", text_features.shape, semantic_features.shape)
             # Multimodal_features are shape of (batch_size, text_length + semantic_lenght, hidden_dim)
             multimodal_features = torch.cat([text_features, semantic_features], dim=1)
-            # TO DO: change this to accept both text and semantic features
             multimodal_mask = None
-            multimodal_self_attention_masks = None
+
+            text_features_dim, semantic_features_dim = text_features.shape[1], semantic_features.shape[1]
+            mulimodal_features_dim = text_features_dim + semantic_features_dim
+            multimodal_self_attention_masks = torch.zeros(
+                (batch_size, mulimodal_features_dim, mulimodal_features_dim),
+                dtype=text_self_attention_masks.dtype,
+                device=text_self_attention_masks.device,
+            )
+            # Fill the top-left quadrant with tensor1
+            multimodal_self_attention_masks[:, :text_features_dim, :text_features_dim] = text_self_attention_masks
+            # Fill the bottom-right quadrant with tensor2
+            multimodal_self_attention_masks[:, text_features_dim:, text_features_dim:] = semantic_self_attention_masks
+
             position_ids = torch.cat([text_position_ids, semantic_position_ids], dim=1)
         elif input_ids is not None:
             multimodal_features = text_features
@@ -2920,6 +2925,7 @@ class GroundingDino2HungarianMatcher(nn.Module):
         label_maps = outputs["label_maps"]
 
         # First take the label map for each class in each batch and then concatenate them
+        print("targets", targets)
         label_maps = torch.cat([label_map[target["class_labels"]] for label_map, target in zip(label_maps, targets)])
         # Normalize label maps based on number of tokens per class
         label_maps = label_maps / label_maps.sum(dim=-1, keepdim=True)
@@ -3155,6 +3161,7 @@ def build_label_maps(logits, input_ids, input_semantics):
 
     delimiter_token_masks = torch.isin(input_ids, delimiter_tokens)
     label_maps = ()
+    # Define where is delimter token
     for delimiter_token_mask in delimiter_token_masks:
         label_map_within_batch = []
         delimiter_indices = torch.where(delimiter_token_mask)[0]
@@ -3287,8 +3294,22 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         ```"""
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        batch_size, _, _, _ = pixel_values.shape
+
         if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
+            if input_ids is not None and input_semantics is not None:
+                attention_mask = torch.ones([batch_size, input_ids.shape[-1] + input_semantics.shape[0]])
+            elif input_ids is not None:
+                attention_mask = torch.ones_like(input_ids)
+            elif input_semantics is not None:
+                # TO DO : Current version is not correct
+                attention_mask = torch.ones_like(input_semantics)
+        else:
+            if input_semantics is not None:
+                attention_mask = torch.cat(
+                    [attention_mask, torch.ones([batch_size, input_semantics.shape[0]], device=attention_mask.device)],
+                    dim=1,
+                )
 
         # First, sent images through Grounding DINO 2 base model to obtain encoder + decoder outputs
         outputs = self.model(
@@ -3326,9 +3347,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
             outputs_class = self.class_embed[level](
                 vision_hidden_state=hidden_states[:, level],
                 multimodal_hidden_state=enc_multimodal_hidden_state,
-                multimodal_mask=None,
-                # TO DO: make this attention
-                # text_token_mask=attention_mask.bool(),
+                multimodal_mask=attention_mask.bool(),
             )
             delta_bbox = self.bbox_embed[level](hidden_states[:, level])
 
@@ -3364,6 +3383,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
                 losses=losses,
             )
             criterion.to(self.device)
+            print("logits shape:", logits.shape)
             label_maps = build_label_maps(logits, input_ids, input_semantics)
             text_mask = build_text_mask(logits, attention_mask)
             # Third: compute the losses, based on outputs and labels

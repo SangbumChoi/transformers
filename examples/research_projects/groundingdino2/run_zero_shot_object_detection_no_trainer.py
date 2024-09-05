@@ -149,7 +149,7 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
                 torch_label.append(label2id[label])
             else:
                 # Give background class
-                torch_label.append(-1)
+                torch_label.append(0)
         prediction["labels"] = torch.Tensor(torch_label).to(dtype=torch.int32).to(device)
 
     return predictions
@@ -303,7 +303,9 @@ def augment_and_transform_batch(
         semantics.extend(crop_bboxes(image, bboxes))
 
     # Apply the image processor transformations: resizing, rescaling, normalization
-    result = processor(images=images, text=text, semantics=semantics, annotations=annotations, return_tensors="pt")
+    result = processor(
+        images=images, text=text, semantics=semantics, images_kwargs={"annotations": annotations}, return_tensors="pt"
+    )
 
     if not return_pixel_mask:
         result.pop("pixel_mask", None)
@@ -314,9 +316,12 @@ def augment_and_transform_batch(
 def collate_fn(batch: List[BatchFeature]) -> Mapping[str, Union[torch.Tensor, List[Any]]]:
     data = {}
     data["pixel_values"] = torch.stack([x["pixel_values"] for x in batch])
-    data["input_ids"] = torch.stack([x["input_ids"] for x in batch])
-    data["token_type_ids"] = torch.stack([x["token_type_ids"] for x in batch])
     data["labels"] = [x["labels"] for x in batch]
+    if "input_ids" in batch[0]:
+        data["input_ids"] = torch.stack([x["input_ids"] for x in batch])
+        data["token_type_ids"] = torch.stack([x["token_type_ids"] for x in batch])
+    if "input_semantics" in batch[0]:
+        data["input_semantics"] = torch.stack([x["input_semantics"] for x in batch])
     if "pixel_mask" in batch[0]:
         data["pixel_mask"] = torch.stack([x["pixel_mask"] for x in batch])
     if "attention_mask" in batch[0]:
@@ -550,10 +555,10 @@ def parse_args():
         help="Whether to freeze the image encoder while training.",
     )
     parser.add_argument(
-        "--freeze_text_backbone",
+        "--freeze_multimodal_backbone",
         required=False,
         action="store_true",
-        help="Whether to freeze the text encoder while training.",
+        help="Whether to freeze the multimodal backbone while training.",
     )
     args = parser.parse_args()
 
@@ -668,7 +673,7 @@ def main():
     # Freeze both text_backbone
     if args.freeze_backbone:
         model.model.freeze_backbone()
-    if args.freeze_text_backbone:
+    if args.freeze_multimodal_backbone:
         for name, param in model.model.multimodal_backbone.named_parameters():
             param.requires_grad_(False)
 
@@ -724,8 +729,8 @@ def main():
     )
 
     with accelerator.main_process_first():
-        train_dataset = dataset["test"].with_transform(train_transform_batch)
-        valid_dataset = dataset["test"].with_transform(validation_transform_batch)
+        train_dataset = dataset["train"].with_transform(train_transform_batch)
+        valid_dataset = dataset["validation"].with_transform(validation_transform_batch)
         test_dataset = dataset["test"].with_transform(validation_transform_batch)
 
     dataloader_common_args = {
@@ -902,20 +907,20 @@ def main():
                 break
 
         logger.info("***** Running evaluation *****")
-        metrics = evaluation_loop(model, processor, accelerator, valid_dataloader, id2label, label2id)
+        # metrics = evaluation_loop(model, processor, accelerator, valid_dataloader, id2label, label2id)
 
-        logger.info(f"epoch {epoch}: {metrics}")
+        # logger.info(f"epoch {epoch}: {metrics}")
 
-        if args.with_tracking:
-            accelerator.log(
-                {
-                    "train_loss": total_loss.item() / len(train_dataloader),
-                    **metrics,
-                    "epoch": epoch,
-                    "step": completed_steps,
-                },
-                step=completed_steps,
-            )
+        # if args.with_tracking:
+        #     accelerator.log(
+        #         {
+        #             "train_loss": total_loss.item() / len(train_dataloader),
+        #             **metrics,
+        #             "epoch": epoch,
+        #             "step": completed_steps,
+        #         },
+        #         step=completed_steps,
+        #     )
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1:
             accelerator.wait_for_everyone()
