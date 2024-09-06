@@ -2420,9 +2420,8 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         self,
         pixel_values: Tensor,
         input_ids: Optional[Tensor] = None,
-        token_type_ids: Optional[Tensor] = None,
-        attention_mask: Optional[Tensor] = None,
         input_semantics: Optional[Tensor] = None,
+        attention_mask: Optional[Tensor] = None,
         pixel_mask: Optional[Tensor] = None,
         encoder_outputs=None,
         output_attentions=None,
@@ -2461,6 +2460,9 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
 
         batch_size, num_channels, height, width = pixel_values.shape
         device = pixel_values.device
+
+        if attention_mask is None:
+            raise ValueError("Currently attetion_mask inside GroundingDino2Model should not be None")
 
         if input_ids is not None:
             # Workaround is applied by monkey-patch to enable text_self_attention_masks
@@ -2505,7 +2507,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         if input_ids is not None and input_semantics is not None:
             # Multimodal_features are shape of (batch_size, text_length + semantic_lenght, hidden_dim)
             multimodal_features = torch.cat([text_features, semantic_features], dim=1)
-            multimodal_mask = None
+            multimodal_mask = attention_mask
 
             text_features_dim, semantic_features_dim = text_features.shape[1], semantic_features.shape[1]
             mulimodal_features_dim = text_features_dim + semantic_features_dim
@@ -2925,7 +2927,6 @@ class GroundingDino2HungarianMatcher(nn.Module):
         label_maps = outputs["label_maps"]
 
         # First take the label map for each class in each batch and then concatenate them
-        print("targets", targets)
         label_maps = torch.cat([label_map[target["class_labels"]] for label_map, target in zip(label_maps, targets)])
         # Normalize label maps based on number of tokens per class
         label_maps = label_maps / label_maps.sum(dim=-1, keepdim=True)
@@ -3004,16 +3005,16 @@ class GroundingDino2Loss(nn.Module):
         """
         if "logits" not in outputs:
             raise KeyError("No logits were found in the outputs")
-        if "text_mask" not in outputs:
-            raise KeyError("No text_mask were found in the outputs")
+        if "multimodal_mask" not in outputs:
+            raise KeyError("No multimodal_mask were found in the outputs")
 
         target_classes_onehot = self._get_target_classes_one_hot(outputs, targets, indices)
         source_logits = outputs["logits"]
-        text_mask = outputs["text_mask"]
+        multimodal_mask = outputs["multimodal_mask"]
 
         # Select only valid logits
-        source_logits = torch.masked_select(source_logits, text_mask)
-        target_classes_onehot = torch.masked_select(target_classes_onehot, text_mask)
+        source_logits = torch.masked_select(source_logits, multimodal_mask)
+        target_classes_onehot = torch.masked_select(target_classes_onehot, multimodal_mask)
 
         num_queries = source_logits.shape[0]
 
@@ -3145,7 +3146,7 @@ class GroundingDino2Loss(nn.Module):
         return losses
 
 
-def build_label_maps(logits, input_ids, input_semantics):
+def build_label_maps(logits, input_ids):
     """
     Computes a mapping between the tokens associated with the prompt labels in the logit space with shape `(batch_size, num_labels, hidden_size)`
     where `num_labels` is defined by the number of classes in the input prompt.
@@ -3153,7 +3154,6 @@ def build_label_maps(logits, input_ids, input_semantics):
     For instance, given the prompt "fish. shark." we get input_ids = [  101,  3869,  1012, 11420,  1012,   102].
     This function will return a mapping for each of the prompt tokens (i.e. tokens associated with "fish" and "shark")
     indicating their position in the logit space.
-
     """
     hidden_size = logits.shape[-1]
     # Add [PAD] token to the list of special tokens
@@ -3178,15 +3178,15 @@ def build_label_maps(logits, input_ids, input_semantics):
     return label_maps
 
 
-def build_text_mask(logits, attention_mask):
+def build_multimodal_mask(logits, attention_mask):
     """
-    Create text_mask based on the matching indices
+    Create multimodal_mask based on the matching indices
     """
     seq_len = attention_mask.shape[1]
-    text_mask = torch.zeros_like(logits, device=logits.device, dtype=attention_mask.dtype)
-    text_mask[:, :, :seq_len] = attention_mask[:, None, :]
+    multimodal_mask = torch.zeros_like(logits, device=logits.device, dtype=attention_mask.dtype)
+    multimodal_mask[:, :, :seq_len] = attention_mask[:, None, :]
 
-    return text_mask.bool()
+    return multimodal_mask.bool()
 
 
 @add_start_docstrings(
@@ -3230,12 +3230,12 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
 
     # taken from https://github.com/facebookresearch/detr/blob/master/models/detr.py
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord, label_maps, text_mask):
+    def _set_aux_loss(self, outputs_class, outputs_coord, label_maps, multimodal_mask):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
         return [
-            {"logits": a, "pred_boxes": b, "label_maps": label_maps, "text_mask": text_mask}
+            {"logits": a, "pred_boxes": b, "label_maps": label_maps, "multimodal_mask": multimodal_mask}
             for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
         ]
 
@@ -3315,9 +3315,8 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         outputs = self.model(
             pixel_values=pixel_values,
             input_ids=input_ids,
-            token_type_ids=token_type_ids,
-            attention_mask=attention_mask,
             input_semantics=input_semantics,
+            attention_mask=attention_mask,
             pixel_mask=pixel_mask,
             encoder_outputs=encoder_outputs,
             output_attentions=output_attentions,
@@ -3383,18 +3382,17 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
                 losses=losses,
             )
             criterion.to(self.device)
-            print("logits shape:", logits.shape)
-            label_maps = build_label_maps(logits, input_ids, input_semantics)
-            text_mask = build_text_mask(logits, attention_mask)
+            label_maps = build_label_maps(logits, input_ids)
+            multimodal_mask = build_multimodal_mask(logits, attention_mask)
             # Third: compute the losses, based on outputs and labels
             outputs_loss = {}
             outputs_loss["logits"] = logits
             outputs_loss["pred_boxes"] = pred_boxes
             outputs_loss["label_maps"] = label_maps
-            outputs_loss["text_mask"] = text_mask
+            outputs_loss["multimodal_mask"] = multimodal_mask
 
             if self.config.auxiliary_loss:
-                auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord, label_maps, text_mask)
+                auxiliary_outputs = self._set_aux_loss(outputs_class, outputs_coord, label_maps, multimodal_mask)
                 outputs_loss["auxiliary_outputs"] = auxiliary_outputs
 
             if self.config.two_stage:
@@ -3402,7 +3400,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
                     "logits": outputs[-2],
                     "pred_boxes": outputs[-1],
                     "label_maps": label_maps,
-                    "text_mask": text_mask,
+                    "multimodal_mask": multimodal_mask,
                 }
 
             loss_dict = criterion(outputs_loss, labels)
