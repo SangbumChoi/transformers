@@ -2535,6 +2535,8 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         else:
             raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
 
+        multimodal_mask = multimodal_mask.bool()
+
         if pixel_mask is None:
             pixel_mask = torch.ones(((batch_size, height, width)), dtype=torch.long, device=device)
 
@@ -2676,8 +2678,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             vision_encoder_hidden_states=encoder_outputs[0],
             vision_encoder_attention_mask=mask_flatten,
             text_encoder_hidden_states=encoder_outputs[1],
-            text_encoder_attention_mask=None,
-            # text_encoder_attention_mask=~multimodal_mask,
+            text_encoder_attention_mask=~multimodal_mask,
             reference_points=reference_points,
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
