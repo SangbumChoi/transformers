@@ -161,19 +161,19 @@ class AltCLIPOutput(ModelOutput):
     Args:
         loss (`torch.FloatTensor` of shape `(1,)`, *optional*, returned when `return_loss` is `True`):
             Contrastive loss for image-text similarity.
-        logits_per_image:(`torch.FloatTensor` of shape `(image_batch_size, text_batch_size)`):
+        logits_per_image (`torch.FloatTensor` of shape `(image_batch_size, text_batch_size)`):
             The scaled dot product scores between `image_embeds` and `text_embeds`. This represents the image-text
             similarity scores.
-        logits_per_text:(`torch.FloatTensor` of shape `(text_batch_size, image_batch_size)`):
+        logits_per_text (`torch.FloatTensor` of shape `(text_batch_size, image_batch_size)`):
             The scaled dot product scores between `text_embeds` and `image_embeds`. This represents the text-image
             similarity scores.
-        text_embeds(`torch.FloatTensor` of shape `(batch_size, output_dim`):
+        text_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim`):
             The text embeddings obtained by applying the projection layer to the pooled output of [`AltCLIPTextModel`].
-        image_embeds(`torch.FloatTensor` of shape `(batch_size, output_dim`):
+        image_embeds (`torch.FloatTensor` of shape `(batch_size, output_dim`):
             The image embeddings obtained by applying the projection layer to the pooled output of [`AltCLIPVisionModel`].
-        text_model_output(`BaseModelOutputWithPooling`):
+        text_model_output (`BaseModelOutputWithPooling`):
             The output of the [`AltCLIPTextModel`].
-        vision_model_output(`BaseModelOutputWithPooling`):
+        vision_model_output (`BaseModelOutputWithPooling`):
             The output of the [`AltCLIPVisionModel`].
     """
 
@@ -1466,12 +1466,12 @@ class AltCLIPModel(AltCLIPPreTrainedModel):
         super().__init__(config)
 
         if not isinstance(config.vision_config, AltCLIPVisionConfig):
-            raise ValueError(
+            raise TypeError(
                 "config.vision_config is expected to be of type AltCLIPVisionConfig but is of type"
                 f" {type(config.vision_config)}."
             )
         if not isinstance(config.text_config, AltCLIPTextConfig):
-            raise ValueError(
+            raise TypeError(
                 "config.text_config is expected to be of type AltCLIPTextConfig but is of type"
                 f" {type(config.text_config)}."
             )
