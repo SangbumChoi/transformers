@@ -2507,7 +2507,6 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         if input_ids is not None and input_semantics is not None:
             # Multimodal_features are shape of (batch_size, text_length + semantic_lenght, hidden_dim)
             multimodal_features = torch.cat([text_features, semantic_features], dim=1)
-            multimodal_mask = attention_mask
 
             text_features_dim, semantic_features_dim = text_features.shape[1], semantic_features.shape[1]
             mulimodal_features_dim = text_features_dim + semantic_features_dim
@@ -2524,18 +2523,16 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             position_ids = torch.cat([text_position_ids, semantic_position_ids], dim=1)
         elif input_ids is not None:
             multimodal_features = text_features
-            multimodal_mask = text_token_mask
             multimodal_self_attention_masks = text_self_attention_masks
             position_ids = text_position_ids
         elif input_semantics is not None:
             multimodal_features = semantic_features
-            multimodal_mask = None
             multimodal_self_attention_masks = semantic_self_attention_masks
             position_ids = semantic_position_ids
         else:
             raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
 
-        multimodal_mask = multimodal_mask.bool()
+        multimodal_mask = attention_mask.bool()
 
         if pixel_mask is None:
             pixel_mask = torch.ones(((batch_size, height, width)), dtype=torch.long, device=device)
@@ -3299,12 +3296,13 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
 
         if attention_mask is None:
             if input_ids is not None and input_semantics is not None:
-                attention_mask = torch.ones([batch_size, input_ids.shape[-1] + input_semantics.shape[0]])
+                # TO DO : Can we make it to torch.ones_like?
+                attention_mask = torch.ones([batch_size, input_ids.shape[-1] + input_semantics.shape[0]], device=pixel_values.device)
             elif input_ids is not None:
                 attention_mask = torch.ones_like(input_ids)
             elif input_semantics is not None:
-                # TO DO : Current version is not correct
-                attention_mask = torch.ones_like(input_semantics)
+                # TO DO : Can we make it to torch.ones_like?
+                attention_mask = torch.ones([batch_size, input_semantics.shape[0]], device=pixel_values.device)
         else:
             if input_semantics is not None:
                 attention_mask = torch.cat(

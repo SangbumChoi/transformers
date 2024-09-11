@@ -378,7 +378,6 @@ def evaluation_loop(
             boxes = convert_bbox_yolo_to_pascal(label["boxes"], label["orig_size"])
             labels = label["class_labels"]
             target.append({"boxes": boxes, "labels": labels})
-        print(target[0]["labels"])
         metric.update(predictions, target)
 
     metrics = metric.compute()
@@ -653,9 +652,14 @@ def main():
         "token": args.hub_token,
         "trust_remote_code": args.trust_remote_code,
     }
+    # TO DO: make this acceptable
+    class_cost = 10.0
+    class_loss_coefficient = 10.0
     config = GroundingDino2Config(
         label2id=label2id,
         id2label=id2label,
+        class_cost=class_cost,
+        class_loss_coefficient=class_loss_coefficient,
         **common_pretrained_args,
     )
     model = GroundingDino2ForObjectDetection.from_pretrained(
@@ -907,20 +911,22 @@ def main():
                 break
 
         logger.info("***** Running evaluation *****")
+        # TO DO enable this function in multi-gpu
         # metrics = evaluation_loop(model, processor, accelerator, valid_dataloader, id2label, label2id)
+        metrics = {}
 
-        # logger.info(f"epoch {epoch}: {metrics}")
+        logger.info(f"epoch {epoch}: {metrics}, {total_loss}")
 
-        # if args.with_tracking:
-        #     accelerator.log(
-        #         {
-        #             "train_loss": total_loss.item() / len(train_dataloader),
-        #             **metrics,
-        #             "epoch": epoch,
-        #             "step": completed_steps,
-        #         },
-        #         step=completed_steps,
-        #     )
+        if args.with_tracking:
+            accelerator.log(
+                {
+                    "train_loss": total_loss / len(train_dataloader),
+                    **metrics,
+                    "epoch": epoch,
+                    "step": completed_steps,
+                },
+                step=completed_steps,
+            )
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1:
             accelerator.wait_for_everyone()

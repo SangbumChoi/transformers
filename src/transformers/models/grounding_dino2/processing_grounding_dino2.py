@@ -158,9 +158,10 @@ class GroundingDino2Processor(ProcessorMixin):
         text_encoding.update(encoding_image_processor)
 
         if semantics is not None:
+            # annotations is not used in semantic_processor, this will avoid warning.
             semantic_encoding = self.semantic_processor(
                 images=semantics,
-                **output_kwargs["images_kwargs"],
+                **{k: v for k, v in output_kwargs["images_kwargs"].items() if k != 'annotations'},
             )
         else:
             semantic_encoding = BatchEncoding()
