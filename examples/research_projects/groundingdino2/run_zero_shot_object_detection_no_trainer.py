@@ -15,7 +15,6 @@
 """Finetuning 🤗 Transformers model for object detection with Accelerate."""
 
 import argparse
-import json
 import logging
 import math
 import os
@@ -34,7 +33,6 @@ from accelerate.utils import set_seed
 from datasets import load_dataset
 from huggingface_hub import HfApi
 from torch.utils.data import DataLoader
-from torchmetrics.detection.mean_ap import MeanAveragePrecision
 from tqdm.auto import tqdm
 
 import transformers
@@ -302,10 +300,27 @@ def augment_and_transform_batch(
                 bboxes.append(_box)
         semantics.extend(crop_bboxes(image, bboxes))
 
-    # Apply the image processor transformations: resizing, rescaling, normalization
-    result = processor(
-        images=images, text=text, semantics=semantics, images_kwargs={"annotations": annotations}, return_tensors="pt"
-    )
+    try:
+        # Apply the image processor transformations: resizing, rescaling, normalization
+        result = processor(
+            images=images,
+            text=text,
+            semantics=semantics,
+            images_kwargs={"annotations": annotations},
+            return_tensors="pt",
+        )
+    except Exception:
+        print(Exception)
+        torch.save(annotations, "debug_annotations.pth")
+        torch.save(images, "debug_images.pth")
+        torch.save(semantics, "debug_semantics.pth")
+        for image in images:
+            print("image.shape", image.shape)
+        print(annotations)
+
+        result = processor(
+            images=images, text=text, semantics=None, images_kwargs={"annotations": annotations}, return_tensors="pt"
+        )
 
     if not return_pixel_mask:
         result.pop("pixel_mask", None)
@@ -351,7 +366,7 @@ def evaluation_loop(
     label2id: Mapping[str, int],
 ) -> dict:
     model.eval()
-    metric = MeanAveragePrecision(box_format="xyxy", class_metrics=True)
+    metrics = {}
 
     for step, batch in enumerate(tqdm(dataloader, disable=not accelerator.is_local_main_process)):
         with torch.no_grad():
@@ -363,36 +378,24 @@ def evaluation_loop(
         # processor convert boxes from YOLO format to Pascal VOC format
         # ([x_min, y_min, x_max, y_max] in absolute coordinates)
         image_size = torch.stack([example["orig_size"] for example in batch["labels"]], dim=0)
-        input_ids = batch["input_ids"]
-        predictions = processor.post_process_grounded_object_detection(
-            outputs, input_ids, box_threshold=0.15, text_threshold=0.1, target_sizes=image_size
+        predictions = processor.post_process_grounded_object_detection_v2(
+            outputs, box_threshold=0.15, target_sizes=image_size
         )
         predictions = nested_to_cpu(predictions)
-        predictions = convert_zero_shot_to_coco_format(predictions, {k.lower(): v for k, v in label2id.items()})
+        metrics["val_loss"] = (
+            (metrics["val_loss"] + outputs.loss.detach().float())
+            if "val_loss" in metrics
+            else outputs.loss.detach().float()
+        )
+        for name, value in outputs.loss_dict.items():
+            if name not in metrics:
+                metrics[f"val_{name}"] = value.detach().float()
+            else:
+                metrics[f"val_{name}"] += value.detach().float()
 
-        # 2. Collect ground truth boxes in the same format for metric computation
-        # Do the same, convert YOLO boxes to Pascal VOC format
-        target = []
-        for label in batch["labels"]:
-            label = nested_to_cpu(label)
-            boxes = convert_bbox_yolo_to_pascal(label["boxes"], label["orig_size"])
-            labels = label["class_labels"]
-            target.append({"boxes": boxes, "labels": labels})
-        metric.update(predictions, target)
-
-    metrics = metric.compute()
-
-    # Replace list of per class metrics with separate metric for each class
-    classes = metrics.pop("classes")
-    map_per_class = metrics.pop("map_per_class")
-    mar_100_per_class = metrics.pop("mar_100_per_class")
-    for class_id, class_map, class_mar in zip(classes, map_per_class, mar_100_per_class):
-        class_name = id2label[class_id.item()]
-        metrics[f"map_{class_name}"] = class_map
-        metrics[f"mar_100_{class_name}"] = class_mar
-
-    # Convert metrics to float
-    metrics = {k: round(v.item(), 4) for k, v in metrics.items()}
+    # normalize
+    for name in metrics:
+        metrics[name] /= step
 
     return metrics
 
@@ -453,7 +456,7 @@ def parse_args():
     parser.add_argument(
         "--dataloader_num_workers",
         type=int,
-        default=4,
+        default=0,
         help="Number of workers to use for the dataloaders.",
     )
     parser.add_argument(
@@ -479,6 +482,12 @@ def parse_args():
         type=float,
         default=1e-8,
         help="Epsilon for AdamW optimizer",
+    )
+    parser.add_argument(
+        "--clip_value",
+        type=float,
+        default=0.1,
+        help="Clip value for gradient norm",
     )
     parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
     parser.add_argument(
@@ -653,13 +662,13 @@ def main():
         "trust_remote_code": args.trust_remote_code,
     }
     # TO DO: make this acceptable
-    class_cost = 10.0
-    class_loss_coefficient = 10.0
+    # class_cost = 10.0
+    # class_loss_coefficient = 10.0
     config = GroundingDino2Config(
         label2id=label2id,
         id2label=id2label,
-        class_cost=class_cost,
-        class_loss_coefficient=class_loss_coefficient,
+        # class_cost=class_cost,
+        # class_loss_coefficient=class_loss_coefficient,
         **common_pretrained_args,
     )
     model = GroundingDino2ForObjectDetection.from_pretrained(
@@ -742,7 +751,11 @@ def main():
         "collate_fn": collate_fn,
     }
     train_dataloader = DataLoader(
-        train_dataset, shuffle=True, batch_size=args.per_device_train_batch_size, **dataloader_common_args
+        train_dataset,
+        shuffle=True,
+        drop_last=True,
+        batch_size=args.per_device_train_batch_size,
+        **dataloader_common_args,
     )
     valid_dataloader = DataLoader(
         valid_dataset, shuffle=False, batch_size=args.per_device_eval_batch_size, **dataloader_common_args
@@ -869,10 +882,25 @@ def main():
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 loss = outputs.loss
+                loss_dict = outputs.loss_dict
                 # We keep track of the loss at each epoch
                 if args.with_tracking:
-                    total_loss += loss.detach().float()
+                    current_loss = loss.detach().float()
+                    current_loss_dict = loss_dict
+                    total_loss += current_loss
+                    if args.with_tracking:
+                        log_dict = {
+                            "current_train_loss": current_loss,
+                        }
+                        for n, value in current_loss_dict.items():
+                            log_dict[n] = value.detach().float()
+                        accelerator.log(
+                            log_dict,
+                            step=completed_steps,
+                        )
                 accelerator.backward(loss)
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_value_(model.parameters(), args.clip_value)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -912,15 +940,14 @@ def main():
 
         logger.info("***** Running evaluation *****")
         # TO DO enable this function in multi-gpu
-        # metrics = evaluation_loop(model, processor, accelerator, valid_dataloader, id2label, label2id)
-        metrics = {}
+        metrics = evaluation_loop(model, processor, accelerator, valid_dataloader, id2label, label2id)
 
-        logger.info(f"epoch {epoch}: {metrics}, {total_loss}")
+        logger.info(f"epoch {epoch}: {metrics}")
 
         if args.with_tracking:
             accelerator.log(
                 {
-                    "train_loss": total_loss / len(train_dataloader),
+                    "total_train_loss": total_loss / len(train_dataloader),
                     **metrics,
                     "epoch": epoch,
                     "step": completed_steps,
@@ -970,8 +997,8 @@ def main():
             args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
         )
         if accelerator.is_main_process:
-            with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
-                json.dump(metrics, f, indent=2)
+            # with open(os.path.join(args.output_dir, "all_results.json"), "w") as f:
+            #     json.dump(metrics, f, indent=2)
 
             processor.save_pretrained(args.output_dir)
 

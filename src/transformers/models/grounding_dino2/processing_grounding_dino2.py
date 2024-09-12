@@ -121,7 +121,7 @@ class GroundingDino2Processor(ProcessorMixin):
         self,
         images: ImageInput = None,
         text: Union[TextInput, PreTokenizedInput, List[TextInput], List[PreTokenizedInput]] = None,
-        semantics: ImageInput = None,
+        semantics: Union[ImageInput, List[ImageInput]] = None,
         audio=None,
         videos=None,
         **kwargs: Unpack[GroundingDino2ProcessorKwargs],
@@ -161,7 +161,7 @@ class GroundingDino2Processor(ProcessorMixin):
             # annotations is not used in semantic_processor, this will avoid warning.
             semantic_encoding = self.semantic_processor(
                 images=semantics,
-                **{k: v for k, v in output_kwargs["images_kwargs"].items() if k != 'annotations'},
+                **{k: v for k, v in output_kwargs["images_kwargs"].items() if k != "annotations"},
             )
         else:
             semantic_encoding = BatchEncoding()

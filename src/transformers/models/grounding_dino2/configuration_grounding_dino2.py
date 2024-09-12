@@ -78,7 +78,7 @@ class GroundingDino2Config(PretrainedConfig):
             The dropout ratio for the attention probabilities.
         activation_dropout (`float`, *optional*, defaults to 0.0):
             The dropout ratio for activations inside the fully connected layer.
-        auxiliary_loss (`bool`, *optional*, defaults to `False`):
+        auxiliary_loss (`bool`, *optional*, defaults to `True`):
             Whether auxiliary decoding losses (loss at each decoder layer) are to be used.
         position_embedding_type (`str`, *optional*, defaults to `"sine"`):
             Type of position embeddings to be used on top of the image features. One of `"sine"` or `"learned"`.
@@ -176,7 +176,7 @@ class GroundingDino2Config(PretrainedConfig):
         dropout=0.1,
         attention_dropout=0.0,
         activation_dropout=0.0,
-        auxiliary_loss=False,
+        auxiliary_loss=True,
         position_embedding_type="sine",
         num_feature_levels=4,
         encoder_n_points=4,

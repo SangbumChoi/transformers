@@ -1526,7 +1526,6 @@ class GroundingDino2DecoderLayer(nn.Module):
         return outputs
 
 
-# Copied from transformers.models.grounding_dino.modeling_grounding_dino.GroundingDinoContrastiveEmbedding with GroundingDino->GroundingDino2
 class GroundingDino2ContrastiveEmbedding(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -2471,8 +2470,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             )
 
             # TO DO: merge this with semantic_token_mask
-            text_attention_mask = torch.ones_like(input_ids)
-            text_token_mask = text_attention_mask.bool()  # just to avoid renaming everywhere
+            # text_attention_mask = torch.ones_like(input_ids)
 
             max_text_len = self.config.max_text_len
             if text_self_attention_masks.shape[1] > max_text_len:
@@ -3297,7 +3295,9 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         if attention_mask is None:
             if input_ids is not None and input_semantics is not None:
                 # TO DO : Can we make it to torch.ones_like?
-                attention_mask = torch.ones([batch_size, input_ids.shape[-1] + input_semantics.shape[0]], device=pixel_values.device)
+                attention_mask = torch.ones(
+                    [batch_size, input_ids.shape[-1] + input_semantics.shape[0]], device=pixel_values.device
+                )
             elif input_ids is not None:
                 attention_mask = torch.ones_like(input_ids)
             elif input_semantics is not None:
