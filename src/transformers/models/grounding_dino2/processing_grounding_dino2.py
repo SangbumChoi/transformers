@@ -167,7 +167,8 @@ class GroundingDino2Processor(ProcessorMixin):
             semantic_encoding = BatchEncoding()
 
         if "pixel_values" in semantic_encoding:
-            semantic_encoding["input_semantics"] = semantic_encoding.pop("pixel_values")
+            input_semantics = semantic_encoding.pop("pixel_values")
+            semantic_encoding["input_semantics"] = torch.stack([input_semantics] * len(text_encoding['pixel_values']))
 
         text_encoding.update(semantic_encoding)
 

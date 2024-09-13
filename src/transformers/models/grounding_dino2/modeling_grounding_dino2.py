@@ -2157,7 +2157,7 @@ def generate_masks_with_input_semantics(batch_size: int, input_semantics: torch.
         - **attention_mask** (`torch.BoolTensor` of shape `(batch_size, sequence_length)`)
         - **position_ids** (`torch.LongTensor` of shape `(batch_size, sequence_length)`)
     """
-    num_semantic, _, width, height = input_semantics.shape
+    _, num_semantic, _, width, height = input_semantics.shape
 
     # generate attention mask and positional ids
     semantic_self_attention_masks = (
@@ -2495,7 +2495,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             )
             # Extract semantic features from CLIP backbone
             # Semantic_features are shape of (batch_size, patch_size*patch_size + 1, hidden_state_dim), e.g. (5, 50, 768)
-            multimodal_outputs = self.multimodal_backbone.vision_model(input_semantics, return_dict=return_dict)
+            multimodal_outputs = self.multimodal_backbone.vision_model(input_semantics[0], return_dict=return_dict)
             semantic_features = multimodal_outputs.last_hidden_state if return_dict else multimodal_outputs[0]
             # Giving input to [CLS] token index only
             semantic_features = self.semantic_projection(semantic_features[:, :1, :])
@@ -3296,17 +3296,17 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
             if input_ids is not None and input_semantics is not None:
                 # TO DO : Can we make it to torch.ones_like?
                 attention_mask = torch.ones(
-                    [batch_size, input_ids.shape[-1] + input_semantics.shape[0]], device=pixel_values.device
+                    [batch_size, input_ids.shape[-1] + input_semantics.shape[1]], device=pixel_values.device
                 )
             elif input_ids is not None:
                 attention_mask = torch.ones_like(input_ids)
             elif input_semantics is not None:
                 # TO DO : Can we make it to torch.ones_like?
-                attention_mask = torch.ones([batch_size, input_semantics.shape[0]], device=pixel_values.device)
+                attention_mask = torch.ones([batch_size, input_semantics.shape[1]], device=pixel_values.device)
         else:
             if input_semantics is not None:
                 attention_mask = torch.cat(
-                    [attention_mask, torch.ones([batch_size, input_semantics.shape[0]], device=attention_mask.device)],
+                    [attention_mask, torch.ones([batch_size, input_semantics.shape[1]], device=attention_mask.device)],
                     dim=1,
                 )
 
