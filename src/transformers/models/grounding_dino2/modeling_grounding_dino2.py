@@ -2150,14 +2150,14 @@ def generate_masks_with_special_tokens_and_transfer_map(input_ids: torch.LongTen
 def generate_masks_with_input_semantics(batch_size: int, input_semantics: torch.FloatTensor) -> Tuple[Tensor, Tensor]:
     """Generate attention mask between each pair of special tokens and positional ids.
     Args:
-        input_semantics (`torch.FloatTensor` of shape `(semantic_length, 3, width, height)`):
+        input_semantics (`torch.FloatTensor` of shape `(batch_size, semantic_length, 3, height, width)`):
             Indices of input semantics after image processor.
     Returns:
         `tuple(torch.Tensor)` comprising attention mask between each special tokens and position_ids:
         - **attention_mask** (`torch.BoolTensor` of shape `(batch_size, sequence_length)`)
         - **position_ids** (`torch.LongTensor` of shape `(batch_size, sequence_length)`)
     """
-    _, num_semantic, _, width, height = input_semantics.shape
+    _, num_semantic, _, height, width = input_semantics.shape
 
     # generate attention mask and positional ids
     semantic_self_attention_masks = (
@@ -2503,7 +2503,7 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
             semantic_features = semantic_features.transpose(0, 1).expand(batch_size, -1, -1)
 
         if input_ids is not None and input_semantics is not None:
-            # Multimodal_features are shape of (batch_size, text_length + semantic_lenght, hidden_dim)
+            # Multimodal_features are shape of (batch_size, text_length + semantic_length, hidden_dim)
             multimodal_features = torch.cat([text_features, semantic_features], dim=1)
 
             text_features_dim, semantic_features_dim = text_features.shape[1], semantic_features.shape[1]
@@ -3142,7 +3142,7 @@ class GroundingDino2Loss(nn.Module):
         return losses
 
 
-def build_label_maps(logits, input_ids):
+def build_label_maps(logits, input_ids, input_semantics):
     """
     Computes a mapping between the tokens associated with the prompt labels in the logit space with shape `(batch_size, num_labels, hidden_size)`
     where `num_labels` is defined by the number of classes in the input prompt.
@@ -3150,26 +3150,48 @@ def build_label_maps(logits, input_ids):
     For instance, given the prompt "fish. shark." we get input_ids = [  101,  3869,  1012, 11420,  1012,   102].
     This function will return a mapping for each of the prompt tokens (i.e. tokens associated with "fish" and "shark")
     indicating their position in the logit space.
+
     """
     hidden_size = logits.shape[-1]
-    # Add [PAD] token to the list of special tokens
-    delimiter_tokens = torch.tensor(SPECIAL_TOKENS + [0], device=input_ids.device)
-
-    delimiter_token_masks = torch.isin(input_ids, delimiter_tokens)
     label_maps = ()
-    # Define where is delimter token
-    for delimiter_token_mask in delimiter_token_masks:
-        label_map_within_batch = []
-        delimiter_indices = torch.where(delimiter_token_mask)[0]
-        for i in range(len(delimiter_indices) - 1):
-            start = delimiter_indices[i]
-            end = delimiter_indices[i + 1]
-            if end - start > 1:
-                label_map = torch.zeros(hidden_size, device=input_ids.device)
-                label_map[start + 1 : end] = 1
-                label_map_within_batch.append(label_map)
+    if input_ids is not None:
+        # Add [PAD] token to the list of special tokens
+        delimiter_tokens = torch.tensor(SPECIAL_TOKENS + [0], device=input_ids.device)
 
-        label_maps += (torch.stack(label_map_within_batch),)
+        delimiter_token_masks = torch.isin(input_ids, delimiter_tokens)
+        # Define where is delimter token
+        for delimiter_token_mask in delimiter_token_masks:
+            label_map_within_batch = []
+            delimiter_indices = torch.where(delimiter_token_mask)[0]
+            for i in range(len(delimiter_indices) - 1):
+                start = delimiter_indices[i]
+                end = delimiter_indices[i + 1]
+                if end - start > 1:
+                    label_map = torch.zeros(hidden_size, device=input_ids.device)
+                    label_map[start + 1 : end] = 1
+                    label_map_within_batch.append(label_map)
+
+            ## in case when text prompt and visual prompt are given together
+            # if input_semantics is not None:
+            #     num_ids = input_ids.shape[-1]
+            #     num_semantics = input_semantics.shape[1]
+            #     for i in range(num_ids, num_ids + num_semantics):
+            #         label_map = torch.zeros(hidden_size, device=input_semantics.device)
+            #         label_map[i] = 1
+            #         label_map_within_batch.append(label_map)
+
+            label_maps += (torch.stack(label_map_within_batch),)
+    elif input_semantics is not None:
+        label_map_within_batch = []
+        num_semantics = input_semantics.shape[1]
+        for i in range(num_semantics):
+            label_map = torch.zeros(hidden_size, device=input_semantics.device)
+            label_map[i] = 1
+            label_map_within_batch.append(label_map)
+
+        label_maps += (torch.stack(label_map_within_batch),) * len(input_semantics)
+    else:
+        raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
 
     return label_maps
 
@@ -3381,7 +3403,7 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
                 losses=losses,
             )
             criterion.to(self.device)
-            label_maps = build_label_maps(logits, input_ids)
+            label_maps = build_label_maps(logits, input_ids, input_semantics)
             multimodal_mask = build_multimodal_mask(logits, attention_mask)
             # Third: compute the losses, based on outputs and labels
             outputs_loss = {}

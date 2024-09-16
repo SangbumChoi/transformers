@@ -20,6 +20,7 @@ import pathlib
 import sys
 from typing import Dict, List, Optional, Tuple, Union
 
+from .modeling_grounding_dino2 import SPECIAL_TOKENS
 from ...image_processing_utils import BatchFeature
 from ...image_transforms import center_to_corners_format
 from ...image_utils import AnnotationFormat, ImageInput
@@ -40,6 +41,26 @@ if is_torch_available():
 
 
 AnnotationType = Dict[str, Union[int, str, List[Dict]]]
+
+
+def label_wise_average(probs, input_ids):
+    delimiter_tokens = torch.tensor(SPECIAL_TOKENS + [0], device=input_ids.device)
+
+    delimiter_token_mask = torch.isin(input_ids, delimiter_tokens)
+    delimiter_indices = torch.where(delimiter_token_mask)[0]
+
+    scores = []
+    for i in range(len(delimiter_indices) - 1):
+        start = delimiter_indices[i]
+        end = delimiter_indices[i + 1]
+        probs[:, [start, end]] = -1
+        if end - start > 1:
+            avg_prob = probs[:, start + 1 : end].mean(dim=1, keepdims=True)
+            probs[:, start + 1 : end] = avg_prob
+            scores.append(avg_prob)
+
+    scores = torch.cat(scores, dim=1).flatten()
+    return probs, scores
 
 
 def get_phrases_from_posmap(posmaps, input_ids):
@@ -158,10 +179,10 @@ class GroundingDino2Processor(ProcessorMixin):
         text_encoding.update(encoding_image_processor)
 
         if semantics is not None:
-            # annotations is not used in semantic_processor, this will avoid warning.
             semantic_encoding = self.semantic_processor(
                 images=semantics,
-                **{k: v for k, v in output_kwargs["images_kwargs"].items() if k != "annotations"},
+                return_tensors=output_kwargs["common_kwargs"]["return_tensors"],
+                input_data_format="channels_last",
             )
         else:
             semantic_encoding = BatchEncoding()
@@ -201,9 +222,10 @@ class GroundingDino2Processor(ProcessorMixin):
     def post_process_grounded_object_detection(
         self,
         outputs,
-        input_ids,
+        input_ids = None,
+        input_semantics = None,
         box_threshold: float = 0.25,
-        text_threshold: float = 0.25,
+        multimodal_threshold: float = 0.25,
         target_sizes: Union[TensorType, List[Tuple]] = None,
     ):
         """
@@ -213,12 +235,14 @@ class GroundingDino2Processor(ProcessorMixin):
         Args:
             outputs ([`GroundingDino2ObjectDetectionOutput`]):
                 Raw outputs of the model.
-            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
                 The token ids of the input text.
+            input_semantics (`torch.FloatTensor` of shape `(batch_size, sequence_length, height, width)`, *optional*):
+                The input semantics.
             box_threshold (`float`, *optional*, defaults to 0.25):
                 Score threshold to keep object detection predictions.
-            text_threshold (`float`, *optional*, defaults to 0.25):
-                Score threshold to keep text detection predictions.
+            multimodal_threshold (`float`, *optional*, defaults to 0.25):
+                Score threshold to keep multimodal detection predictions.
             target_sizes (`torch.Tensor` or `List[Tuple[int, int]]`, *optional*):
                 Tensor of shape `(batch_size, 2)` or list of tuples (`Tuple[int, int]`) containing the target size
                 `(height, width)` of each image in the batch. If unset, predictions will not be resized.
@@ -256,8 +280,26 @@ class GroundingDino2Processor(ProcessorMixin):
             score = s[s > box_threshold]
             box = b[s > box_threshold]
             prob = p[s > box_threshold]
-            label_ids = get_phrases_from_posmap(prob > text_threshold, input_ids[idx])
-            label = self.batch_decode(label_ids)
+            if input_ids is not None and input_semantics is not None:
+                raise ValueError(f"Currently only support either input_ids or input_semantics. Not both.")
+            elif input_ids is not None:
+                multimodal_prob, multimodal_scores = label_wise_average(
+                    prob[:,:len(input_ids[idx])],
+                    input_ids[idx],
+                )
+                posmap = multimodal_prob > multimodal_threshold
+                label_ids = get_phrases_from_posmap(posmap, input_ids[idx])
+                label = self.batch_decode(label_ids)
+                score = multimodal_scores[multimodal_scores > multimodal_threshold]
+            elif input_semantics is not None:
+                multimodal_prob = prob[:,:len(input_semantics[idx])]
+                label = [
+                    (m_prob > multimodal_threshold).nonzero().flatten()
+                    for m_prob in multimodal_prob
+                ]
+            else:
+                raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
+
             results.append({"scores": score, "labels": label, "boxes": box})
 
         return results
