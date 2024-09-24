@@ -20,11 +20,11 @@ import pathlib
 import sys
 from typing import Dict, List, Optional, Tuple, Union
 
-from .modeling_grounding_dino2 import SPECIAL_TOKENS
 from ...image_processing_utils import BatchFeature
 from ...image_transforms import center_to_corners_format
 from ...image_utils import AnnotationFormat, ImageInput
 from ...processing_utils import ImagesKwargs, ProcessingKwargs, ProcessorMixin
+from .modeling_grounding_dino2 import SPECIAL_TOKENS
 
 
 if sys.version_info >= (3, 11):
@@ -83,7 +83,7 @@ def get_phrases_from_posmap(posmaps, input_ids):
 
     token_ids = []
     for posmap in posmaps:
-        non_zero_idx = posmap.nonzero(as_tuple=True)[0].tolist()
+        non_zero_idx = list(filter(lambda x: x < len(input_ids), posmap.nonzero(as_tuple=True)[0].tolist()))
         token_ids.append([input_ids[i] for i in non_zero_idx])
 
     return token_ids
@@ -184,13 +184,33 @@ class GroundingDino2Processor(ProcessorMixin):
                 return_tensors=output_kwargs["common_kwargs"]["return_tensors"],
                 input_data_format="channels_last",
             )
+            # Merge attention_mask manually
+            # If text_encoding exist then shape `(batch_size, sequence_length + semantic_length)`
+            if "attention_mask" in text_encoding:
+                semantic_encoding["attention_mask"] = torch.ones(
+                    (
+                        text_encoding["attention_mask"].shape[0],
+                        text_encoding["attention_mask"].shape[1] + semantic_encoding["pixel_values"].shape[0],
+                    ),
+                    dtype=torch.long,
+                    device=text_encoding["pixel_values"].device,
+                )
+            # If text_encoding does not exist then shape `(batch_size, semantic_length)`
+            else:
+                semantic_encoding["attention_mask"] = torch.ones(
+                    (len(text_encoding["pixel_values"]), semantic_encoding["pixel_values"].shape[0]),
+                    dtype=torch.long,
+                    device=text_encoding["pixel_values"].device,
+                )
+
+            # This is workaround solution to accept semantic (AKA. CLIP semantics), since `datasets` library only will chunk the size of input_semantics to batch_size
+            if "pixel_values" in semantic_encoding:
+                input_semantics = semantic_encoding.pop("pixel_values")
+                semantic_encoding["input_semantics"] = torch.stack(
+                    [input_semantics] * len(text_encoding["pixel_values"])
+                )
         else:
             semantic_encoding = BatchEncoding()
-
-        if "pixel_values" in semantic_encoding:
-            input_semantics = semantic_encoding.pop("pixel_values")
-            # This is workaround solution to accept semantic (AKA. CLIP semantics), since `datasets` library only will chunk the size of input_semantics to batch_size
-            semantic_encoding["input_semantics"] = torch.stack([input_semantics] * len(text_encoding['pixel_values']))
 
         text_encoding.update(semantic_encoding)
 
@@ -222,8 +242,8 @@ class GroundingDino2Processor(ProcessorMixin):
     def post_process_grounded_object_detection(
         self,
         outputs,
-        input_ids = None,
-        input_semantics = None,
+        input_ids=None,
+        input_semantics=None,
         box_threshold: float = 0.25,
         multimodal_threshold: float = 0.25,
         target_sizes: Union[TensorType, List[Tuple]] = None,
@@ -280,11 +300,9 @@ class GroundingDino2Processor(ProcessorMixin):
             score = s[s > box_threshold]
             box = b[s > box_threshold]
             prob = p[s > box_threshold]
-            if input_ids is not None and input_semantics is not None:
-                raise ValueError(f"Currently only support either input_ids or input_semantics. Not both.")
-            elif input_ids is not None:
+            if input_ids is not None:
                 multimodal_prob, multimodal_scores = label_wise_average(
-                    prob[:,:len(input_ids[idx])],
+                    prob,
                     input_ids[idx],
                 )
                 posmap = multimodal_prob > multimodal_threshold
@@ -292,70 +310,11 @@ class GroundingDino2Processor(ProcessorMixin):
                 label = self.batch_decode(label_ids)
                 score = multimodal_scores[multimodal_scores > multimodal_threshold]
             elif input_semantics is not None:
-                multimodal_prob = prob[:,:len(input_semantics[idx])]
-                label = [
-                    (m_prob > multimodal_threshold).nonzero().flatten()
-                    for m_prob in multimodal_prob
-                ]
+                multimodal_prob = prob[:, : len(input_semantics[idx])]
+                label = [(m_prob > multimodal_threshold).nonzero().flatten() for m_prob in multimodal_prob]
             else:
                 raise ValueError(f"input_ids : {input_ids}, input_semantics : {input_semantics} can't be both None")
 
             results.append({"scores": score, "labels": label, "boxes": box})
-
-        return results
-
-    def post_process_grounded_object_detection_v2(
-        self,
-        outputs,
-        box_threshold: float = 0.25,
-        target_sizes: Union[TensorType, List[Tuple]] = None,
-    ):
-        """
-        Converts the raw output of [`GroundingDino2ForObjectDetection`] into final bounding boxes in (top_left_x, top_left_y,
-        bottom_right_x, bottom_right_y) format and get the associated text label.
-
-        Args:
-            outputs ([`GroundingDino2ObjectDetectionOutput`]):
-                Raw outputs of the model.
-            box_threshold (`float`, *optional*, defaults to 0.25):
-                Score threshold to keep object detection predictions.
-            target_sizes (`torch.Tensor` or `List[Tuple[int, int]]`, *optional*):
-                Tensor of shape `(batch_size, 2)` or list of tuples (`Tuple[int, int]`) containing the target size
-                `(height, width)` of each image in the batch. If unset, predictions will not be resized.
-        Returns:
-            `List[Dict]`: A list of dictionaries, each dictionary containing the scores, labels and boxes for an image
-            in the batch as predicted by the model.
-        """
-        logits, boxes = outputs.logits, outputs.pred_boxes
-
-        if target_sizes is not None:
-            if len(logits) != len(target_sizes):
-                raise ValueError(
-                    "Make sure that you pass in as many target sizes as the batch dimension of the logits"
-                )
-
-        probs = torch.sigmoid(logits)  # (batch_size, num_queries, 256)
-        scores = torch.max(probs, dim=-1)[0]  # (batch_size, num_queries)
-
-        # Convert to [x0, y0, x1, y1] format
-        boxes = center_to_corners_format(boxes)
-
-        # Convert from relative [0, 1] to absolute [0, height] coordinates
-        if target_sizes is not None:
-            if isinstance(target_sizes, List):
-                img_h = torch.Tensor([i[0] for i in target_sizes])
-                img_w = torch.Tensor([i[1] for i in target_sizes])
-            else:
-                img_h, img_w = target_sizes.unbind(1)
-
-            scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1).to(boxes.device)
-            boxes = boxes * scale_fct[:, None, :]
-
-        results = []
-        for idx, (s, b, p) in enumerate(zip(scores, boxes, probs)):
-            score = s[s > box_threshold]
-            box = b[s > box_threshold]
-            prob = p[s > box_threshold]
-            results.append({"scores": score, "boxes": box, "probs": prob})
 
         return results

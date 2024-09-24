@@ -2461,7 +2461,9 @@ class GroundingDino2Model(GroundingDino2PreTrainedModel):
         device = pixel_values.device
 
         if attention_mask is None:
-            raise ValueError("Currently attetion_mask inside GroundingDino2Model should not be None")
+            raise ValueError(
+                "Currently attetion_mask inside GroundingDino2Model should not be None. Processing part will automatically generate."
+            )
 
         if input_ids is not None:
             # Workaround is applied by monkey-patch to enable text_self_attention_masks
@@ -3313,24 +3315,6 @@ class GroundingDino2ForObjectDetection(GroundingDino2PreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         batch_size, _, _, _ = pixel_values.shape
-
-        if attention_mask is None:
-            if input_ids is not None and input_semantics is not None:
-                # TO DO : Can we make it to torch.ones_like?
-                attention_mask = torch.ones(
-                    [batch_size, input_ids.shape[-1] + input_semantics.shape[1]], device=pixel_values.device
-                )
-            elif input_ids is not None:
-                attention_mask = torch.ones_like(input_ids)
-            elif input_semantics is not None:
-                # TO DO : Can we make it to torch.ones_like?
-                attention_mask = torch.ones([batch_size, input_semantics.shape[1]], device=pixel_values.device)
-        else:
-            if input_semantics is not None:
-                attention_mask = torch.cat(
-                    [attention_mask, torch.ones([batch_size, input_semantics.shape[1]], device=attention_mask.device)],
-                    dim=1,
-                )
 
         # First, sent images through Grounding DINO 2 base model to obtain encoder + decoder outputs
         outputs = self.model(

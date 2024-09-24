@@ -15,7 +15,6 @@
 """Finetuning 🤗 Transformers model for object detection with Accelerate."""
 
 import argparse
-import json
 import logging
 import math
 import os
@@ -153,7 +152,7 @@ def convert_zero_shot_to_coco_format(predictions, label2id):
                     torch_label.append(label2id[lab])
                     cnt += 1
                 else:
-                    for k,v in label2id.items():
+                    for k, v in label2id.items():
                         if k.startswith(lab):
                             torch_label.append(v)
                             cnt += 1
@@ -352,11 +351,12 @@ def collate_fn(batch: List[BatchFeature], use_semantics=False) -> Mapping[str, U
         if "input_semantics" in batch[0]:
             data["input_semantics"] = torch.stack([x["input_semantics"] for x in batch])
             # Either use text prompt or visual prompt. Not both.
-            if random.random() < 0.5:
-                data["input_ids"] = None
-                data["attention_mask"] = None
-            else:
-                data["input_semantics"] = None
+            # TO DO: might uncomment this
+            # if random.random() < 0.5:
+            #     data["input_ids"] = None
+            #     data["attention_mask"] = None
+            # else:
+            #     data["input_semantics"] = None
     if "pixel_mask" in batch[0]:
         data["pixel_mask"] = torch.stack([x["pixel_mask"] for x in batch])
     if "attention_mask" in batch[0]:
@@ -418,7 +418,6 @@ def evaluation_loop(
             boxes = convert_bbox_yolo_to_pascal(label["boxes"], label["orig_size"])
             labels = label["class_labels"]
             target.append({"boxes": boxes, "labels": labels})
-        # print(target[0]["labels"])
         metric.update(predictions, target)
 
     metric.to(accelerator.device)
@@ -799,7 +798,7 @@ def main():
         batch_size=args.per_device_eval_batch_size,
         num_workers=args.dataloader_num_workers,
         # use_semantics can be set to True when evaluation_loop can incorpoate visual prompt in near future
-        collate_fn=partial(collate_fn, use_semantics=False),
+        collate_fn=partial(collate_fn, use_semantics=True),
     )
     test_dataloader = DataLoader(
         test_dataset,
@@ -807,7 +806,7 @@ def main():
         batch_size=args.per_device_eval_batch_size,
         num_workers=args.dataloader_num_workers,
         # use_semantics can be set to True when evaluation_loop can incorpoate visual prompt in near future
-        collate_fn=partial(collate_fn, use_semantics=False),
+        collate_fn=partial(collate_fn, use_semantics=True),
     )
 
     # ------------------------------------------------------------------------------------------------
