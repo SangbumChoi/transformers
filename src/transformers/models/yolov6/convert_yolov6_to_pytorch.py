@@ -173,13 +173,6 @@ def convert_yolov6_checkpoint(
     model = Yolov6ForObjectDetection(config)
     model.eval()
     new_state_dict = convert_state_dict(state_dict, model)
-
-    not_converted_from = set(new_state_dict.keys()) - set(model.state_dict().keys())
-    not_converted_to = set(model.state_dict().keys()) - set(new_state_dict.keys())
-    if not_converted_from or not_converted_to:
-        raise Exception(f"Missing conversions: {not_converted_from} --> {not_converted_to}")
-    print(f"Loaded {len(set(new_state_dict.keys()))} weights")
-
     model.load_state_dict(new_state_dict)
 
     # Check outputs on an image, prepared by YolosImageProcessor
