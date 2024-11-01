@@ -227,12 +227,8 @@ def convert_yolov6_checkpoint(
         expected_slice_logits = None
         expected_slice_boxes = None
 
-    if expected_slice_logits is not None:
-        if not torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-3):
-            logger.warning("logit value mismatch")
-    if expected_slice_boxes is not None:
-        if not torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-1):
-            logger.warning("bbox value mismatch")
+    assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-3)
+    assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-1)
 
     Path(pytorch_dump_folder_path).mkdir(exist_ok=True)
     print(f"Saving model {yolov6_name} to {pytorch_dump_folder_path}")
