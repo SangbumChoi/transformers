@@ -42,10 +42,38 @@ def get_yolov6_config(yolov6_name: str) -> Yolov6Config:
         config.image_size = 640
         config.backbone_out_channels = [32, 64, 128, 256, 512]
         config.neck_out_channels = [128, 64, 64, 128, 128, 256]
+        config.iou_type = "giou"
+        config.class_loss_coefficient = 1.0
+        config.dfl_loss_coefficient = 1.0
     elif yolov6_name == "yolov6m":
-        pass
+        config.image_size = 640
+        config.backbone_num_repeats = [1, 4, 7, 11, 4]
+        config.backbone_out_channels = [48, 96, 192, 384, 768]
+        config.backbone_csp_e = float(2) / 3
+        config.backbone_cspsppf = False
+        config.backbone_stage_block_type = "Yolov6BepC3"
+        config.neck_num_repeats = [7, 7, 7, 7]
+        config.neck_out_channels = [192, 96, 96, 192, 192, 384]
+        config.neck_csp_e = float(2) / 3
+        config.neck_stage_block_type = "Yolov6BepC3"
+        config.iou_type = "giou"
+        config.use_dfl = True
+        config.reg_max = 16
     elif yolov6_name == "yolov6l":
-        pass
+        config.image_size = 640
+        config.block_type = "Yolov6ConvBNSilu"
+        config.backbone_num_repeats = [1, 6, 12, 18, 6]
+        config.backbone_out_channels = [64, 128, 256, 512, 1024]
+        config.backbone_csp_e = float(1) / 2
+        config.backbone_cspsppf = False
+        config.backbone_stage_block_type = "Yolov6BepC3"
+        config.neck_num_repeats = [12, 12, 12, 12]
+        config.neck_out_channels = [256, 128, 128, 256, 256, 512]
+        config.neck_csp_e = float(1) / 2
+        config.neck_stage_block_type = "Yolov6BepC3"
+        config.iou_type = "giou"
+        config.use_dfl = True
+        config.reg_max = 16
     elif yolov6_name == "yolov6l6":
         config.image_size = 1280
         config.block_type = "Yolov6ConvBNSilu"
@@ -135,7 +163,7 @@ def convert_yolov6_checkpoint(
     config = get_yolov6_config(yolov6_name)
 
     # load original state_dict
-    state_dict = torch.load(checkpoint_path, map_location="cpu")["model"]
+    state_dict = torch.load(checkpoint_path, map_location="cpu")
 
     # load 🤗 model
     model = Yolov6ForObjectDetection(config)
@@ -182,6 +210,20 @@ def convert_yolov6_checkpoint(
                 [14.94720, 11.38480, 30.77328],
                 [22.81690, 11.56549, 44.71961],
             ]
+        )
+    elif yolov6_name == "yolov6m":
+        expected_slice_logits = torch.tensor(
+            [[-4.4237, -5.7332, -5.0298], [-4.5706, -5.8418, -5.1312], [-4.6787, -5.8133, -5.2177]]
+        )
+        expected_slice_boxes = torch.tensor(
+            [[15.73717, 25.04552, 31.35688], [19.21497, 18.68022, 39.56915], [23.27861, 14.67001, 47.11521]]
+        )
+    elif yolov6_name == "yolov6l":
+        expected_slice_logits = torch.tensor(
+            [[-4.0884, -5.3208, -4.6791], [-4.1873, -5.3827, -4.7223], [-4.5806, -5.5509, -4.9667]]
+        )
+        expected_slice_boxes = torch.tensor(
+            [[11.7442, 28.9719, 25.2751], [22.2533, 28.0677, 52.8962], [33.4531, 19.2840, 68.9814]]
         )
     elif yolov6_name == "yolov6l6":
         expected_slice_logits = torch.tensor(
@@ -231,13 +273,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--checkpoint_path",
-        default=None,
+        default="",
         type=str,
         help="Path to the original state dict (.pth file).",
     )
     parser.add_argument(
         "--pytorch_dump_folder_path",
-        default=None,
+        default="",
         type=str,
         help="Path to the output PyTorch model directory.",
     )
