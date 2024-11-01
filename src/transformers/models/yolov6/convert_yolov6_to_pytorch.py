@@ -223,9 +223,7 @@ def convert_yolov6_checkpoint(
             [[19.42040, 26.32382, 40.39944], [25.69743, 24.37918, 54.64775], [33.79816, 14.53956, 69.25398]]
         )
     else:
-        logger.warning(f"Skipping logit tests: {yolov6_name}")
-        expected_slice_logits = None
-        expected_slice_boxes = None
+        raise ValueError(f"Unknown yolov6_name: {yolov6_name}")
 
     assert torch.allclose(logits[0, :3, :3], expected_slice_logits, atol=1e-3)
     assert torch.allclose(pred_boxes[0, :3, :3], expected_slice_boxes, atol=1e-1)
