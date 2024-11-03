@@ -30,6 +30,20 @@ from transformers import ViTPoseBackboneConfig, ViTPoseConfig, ViTPoseForPoseEst
 from transformers.models.vitpose.image_processing_vitpose import coco_to_pascal_voc
 
 
+# fmt: off
+ORIGINAL_TO_CONVERTED_KEY_MAPPING = {
+    r"patch_embed.proj": r"embeddings.patch_embeddings.projection",
+    r"pos_embed": r"embeddings.position_embeddings",
+    r"blocks": r"encoder.layer",
+    r"attn.proj": r"attention.output.dense",
+    r"attn": r"attention.self",
+    r"norm1": r"layernorm_before",
+    r"norm2": r"layernorm_after",
+    r"last_norm": r"layernorm",
+}
+# fmt: on
+
+
 def get_original_pose_results(pixel_values, img_metas, output_heatmap, image_processor):
     batch_size = pixel_values.shape[0]
 
@@ -71,6 +85,47 @@ def get_config(model_name):
     num_experts = 6 if "+" in model_name else 1
     part_features = 192 if "+" in model_name else 0
 
+    keypoint_edges = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+    ],
+    keypoint_labels = [
+        "Nose",
+        "L_Eye",
+        "R_Eye",
+        "L_Ear",
+        "R_Ear",
+        "L_Shoulder",
+        "R_Shoulder",
+        "L_Elbow",
+        "R_Elbow",
+        "L_Wrist",
+        "R_Wrist",
+        "L_Hip",
+        "R_Hip",
+        "L_Knee",
+        "R_Knee",
+        "L_Ankle",
+        "R_Ankle",
+    ]
+
     backbone_config = ViTPoseBackboneConfig(out_indices=[12], num_experts=num_experts, part_features=part_features)
     # size of the architecture
     if "small" in model_name:
@@ -95,28 +150,14 @@ def get_config(model_name):
         backbone_config=backbone_config,
         num_labels=17,
         use_simple_decoder=use_simple_decoder,
+        keypoint_labels=keypoint_labels,
+        keypoint_edges=keypoint_edges,
     )
 
     return config
 
 
 def rename_key(name, config):
-    if "patch_embed.proj" in name:
-        name = name.replace("patch_embed.proj", "embeddings.patch_embeddings.projection")
-    if "pos_embed" in name:
-        name = name.replace("pos_embed", "embeddings.position_embeddings")
-    if "blocks" in name:
-        name = name.replace("blocks", "encoder.layer")
-    if "attn.proj" in name:
-        name = name.replace("attn.proj", "attention.output.dense")
-    if "attn" in name:
-        name = name.replace("attn", "attention.self")
-    if "norm1" in name:
-        name = name.replace("norm1", "layernorm_before")
-    if "norm2" in name:
-        name = name.replace("norm2", "layernorm_after")
-    if "last_norm" in name:
-        name = name.replace("last_norm", "layernorm")
 
     # keypoint head
     if "keypoint_head" in name and config.use_simple_decoder:
@@ -192,9 +233,9 @@ def convert_vitpose_checkpoint(model_name, pytorch_dump_folder_path, push_to_hub
     # define default ViTPose configuration
     config = get_config(model_name)
 
-    # load HuggingFace model
-    model = ViTPoseForPoseEstimation(config)
-    model.eval()
+    # ------------------------------------------------------------
+    # Convert weights
+    # ------------------------------------------------------------
 
     # load original state_dict
     filename = model_name_to_file_name[model_name]
@@ -203,8 +244,12 @@ def convert_vitpose_checkpoint(model_name, pytorch_dump_folder_path, push_to_hub
     )
     state_dict = torch.load(checkpoint_path, map_location="cpu")["state_dict"]
 
-    # rename some keys
+    print("Converting model...")
     new_state_dict = convert_state_dict(state_dict, dim=config.backbone_config.hidden_size, config=config)
+ 
+    print("Loading the checkpoint in a VitPose model.")
+    model = ViTPoseForPoseEstimation(config)
+    model.eval()
     missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
 
     # TODO add associate_heads to the MoE models
