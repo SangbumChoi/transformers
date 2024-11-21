@@ -18,7 +18,7 @@
 # to defer the actual importing for when the objects are requested. This way `import transformers` provides the names
 # in the namespace without actually importing anything (and especially none of the backends).
 
-__version__ = "4.46.0.dev0"
+__version__ = "4.47.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -142,7 +142,9 @@ _import_structure = {
         "is_tensorboard_available",
         "is_wandb_available",
     ],
+    "loss": [],
     "modelcard": ["ModelCard"],
+    # Losses
     "modeling_tf_pytorch_utils": [
         "convert_tf_weight_name_to_pt_weight_name",
         "load_pytorch_checkpoint_in_tf2_model",
@@ -452,6 +454,7 @@ _import_structure = {
         "GitProcessor",
         "GitVisionConfig",
     ],
+    "models.glm": ["GlmConfig"],
     "models.glpn": ["GLPNConfig"],
     "models.gpt2": [
         "GPT2Config",
@@ -590,6 +593,10 @@ _import_structure = {
     "models.mobilenet_v2": ["MobileNetV2Config"],
     "models.mobilevit": ["MobileViTConfig"],
     "models.mobilevitv2": ["MobileViTV2Config"],
+    "models.moshi": [
+        "MoshiConfig",
+        "MoshiDepthConfig",
+    ],
     "models.mpnet": [
         "MPNetConfig",
         "MPNetTokenizer",
@@ -613,6 +620,7 @@ _import_structure = {
     "models.nougat": ["NougatProcessor"],
     "models.nystromformer": ["NystromformerConfig"],
     "models.olmo": ["OlmoConfig"],
+    "models.olmo_1124": ["Olmo1124Config"],
     "models.olmoe": ["OlmoeConfig"],
     "models.omdet_turbo": [
         "OmDetTurboConfig",
@@ -862,6 +870,7 @@ _import_structure = {
         "ImageClassificationPipeline",
         "ImageFeatureExtractionPipeline",
         "ImageSegmentationPipeline",
+        "ImageTextToTextPipeline",
         "ImageToImagePipeline",
         "ImageToTextPipeline",
         "JsonPipelineDataFormat",
@@ -936,7 +945,6 @@ _import_structure = {
         "is_av_available",
         "is_bitsandbytes_available",
         "is_datasets_available",
-        "is_decord_available",
         "is_faiss_available",
         "is_flax_available",
         "is_keras_nlp_available",
@@ -969,6 +977,7 @@ _import_structure = {
     "utils.quantization_config": [
         "AqlmConfig",
         "AwqConfig",
+        "BitNetConfig",
         "BitsAndBytesConfig",
         "CompressedTensorsConfig",
         "EetqConfig",
@@ -1178,14 +1187,14 @@ else:
     )
     _import_structure["models.convnext"].extend(["ConvNextFeatureExtractor", "ConvNextImageProcessor"])
     _import_structure["models.deformable_detr"].extend(
-        ["DeformableDetrFeatureExtractor", "DeformableDetrImageProcessor"]
+        ["DeformableDetrFeatureExtractor", "DeformableDetrImageProcessor", "DeformableDetrImageProcessorFast"]
     )
     _import_structure["models.deit"].extend(["DeiTFeatureExtractor", "DeiTImageProcessor"])
     _import_structure["models.deprecated.deta"].append("DetaImageProcessor")
     _import_structure["models.deprecated.efficientformer"].append("EfficientFormerImageProcessor")
     _import_structure["models.deprecated.tvlt"].append("TvltImageProcessor")
     _import_structure["models.deprecated.vit_hybrid"].extend(["ViTHybridImageProcessor"])
-    _import_structure["models.detr"].extend(["DetrFeatureExtractor", "DetrImageProcessor"])
+    _import_structure["models.detr"].extend(["DetrFeatureExtractor", "DetrImageProcessor", "DetrImageProcessorFast"])
     _import_structure["models.donut"].extend(["DonutFeatureExtractor", "DonutImageProcessor"])
     _import_structure["models.dpt"].extend(["DPTFeatureExtractor", "DPTImageProcessor"])
     _import_structure["models.efficientnet"].append("EfficientNetImageProcessor")
@@ -1222,7 +1231,7 @@ else:
     _import_structure["models.poolformer"].extend(["PoolFormerFeatureExtractor", "PoolFormerImageProcessor"])
     _import_structure["models.pvt"].extend(["PvtImageProcessor"])
     _import_structure["models.qwen2_vl"].extend(["Qwen2VLImageProcessor"])
-    _import_structure["models.rt_detr"].extend(["RTDetrImageProcessor"])
+    _import_structure["models.rt_detr"].extend(["RTDetrImageProcessor", "RTDetrImageProcessorFast"])
     _import_structure["models.sam"].extend(["SamImageProcessor"])
     _import_structure["models.segformer"].extend(["SegformerFeatureExtractor", "SegformerImageProcessor"])
     _import_structure["models.seggpt"].extend(["SegGptImageProcessor"])
@@ -1296,6 +1305,8 @@ else:
     _import_structure["generation"].extend(
         [
             "AlternatingCodebooksLogitsProcessor",
+            "BayesianDetectorConfig",
+            "BayesianDetectorModel",
             "BeamScorer",
             "BeamSearchScorer",
             "ClassifierFreeGuidanceLogitsProcessor",
@@ -1334,6 +1345,9 @@ else:
             "StopStringCriteria",
             "SuppressTokensAtBeginLogitsProcessor",
             "SuppressTokensLogitsProcessor",
+            "SynthIDTextWatermarkDetector",
+            "SynthIDTextWatermarkingConfig",
+            "SynthIDTextWatermarkLogitsProcessor",
             "TemperatureLogitsWarper",
             "TopKLogitsWarper",
             "TopPLogitsWarper",
@@ -2290,6 +2304,15 @@ else:
             "GitVisionModel",
         ]
     )
+    _import_structure["models.glm"].extend(
+        [
+            "GlmForCausalLM",
+            "GlmForSequenceClassification",
+            "GlmForTokenClassification",
+            "GlmModel",
+            "GlmPreTrainedModel",
+        ]
+    )
     _import_structure["models.glpn"].extend(
         [
             "GLPNForDepthEstimation",
@@ -2710,6 +2733,7 @@ else:
     _import_structure["models.mistral"].extend(
         [
             "MistralForCausalLM",
+            "MistralForQuestionAnswering",
             "MistralForSequenceClassification",
             "MistralForTokenClassification",
             "MistralModel",
@@ -2719,6 +2743,7 @@ else:
     _import_structure["models.mixtral"].extend(
         [
             "MixtralForCausalLM",
+            "MixtralForQuestionAnswering",
             "MixtralForSequenceClassification",
             "MixtralForTokenClassification",
             "MixtralModel",
@@ -2780,6 +2805,14 @@ else:
             "MobileViTV2ForSemanticSegmentation",
             "MobileViTV2Model",
             "MobileViTV2PreTrainedModel",
+        ]
+    )
+    _import_structure["models.moshi"].extend(
+        [
+            "MoshiForCausalLM",
+            "MoshiForConditionalGeneration",
+            "MoshiModel",
+            "MoshiPreTrainedModel",
         ]
     )
     _import_structure["models.mpnet"].extend(
@@ -2887,6 +2920,13 @@ else:
             "OlmoForCausalLM",
             "OlmoModel",
             "OlmoPreTrainedModel",
+        ]
+    )
+    _import_structure["models.olmo_1124"].extend(
+        [
+            "Olmo1124ForCausalLM",
+            "Olmo1124Model",
+            "Olmo1124PreTrainedModel",
         ]
     )
     _import_structure["models.olmoe"].extend(
@@ -3095,6 +3135,7 @@ else:
     _import_structure["models.qwen2"].extend(
         [
             "Qwen2ForCausalLM",
+            "Qwen2ForQuestionAnswering",
             "Qwen2ForSequenceClassification",
             "Qwen2ForTokenClassification",
             "Qwen2Model",
@@ -3111,6 +3152,7 @@ else:
     _import_structure["models.qwen2_moe"].extend(
         [
             "Qwen2MoeForCausalLM",
+            "Qwen2MoeForQuestionAnswering",
             "Qwen2MoeForSequenceClassification",
             "Qwen2MoeForTokenClassification",
             "Qwen2MoeModel",
@@ -5296,6 +5338,7 @@ if TYPE_CHECKING:
         GitProcessor,
         GitVisionConfig,
     )
+    from .models.glm import GlmConfig
     from .models.glpn import GLPNConfig
     from .models.gpt2 import (
         GPT2Config,
@@ -5453,6 +5496,10 @@ if TYPE_CHECKING:
     from .models.mobilevitv2 import (
         MobileViTV2Config,
     )
+    from .models.moshi import (
+        MoshiConfig,
+        MoshiDepthConfig,
+    )
     from .models.mpnet import (
         MPNetConfig,
         MPNetTokenizer,
@@ -5477,6 +5524,7 @@ if TYPE_CHECKING:
         NystromformerConfig,
     )
     from .models.olmo import OlmoConfig
+    from .models.olmo_1124 import Olmo1124Config
     from .models.olmoe import OlmoeConfig
     from .models.omdet_turbo import (
         OmDetTurboConfig,
@@ -5766,6 +5814,7 @@ if TYPE_CHECKING:
         ImageClassificationPipeline,
         ImageFeatureExtractionPipeline,
         ImageSegmentationPipeline,
+        ImageTextToTextPipeline,
         ImageToImagePipeline,
         ImageToTextPipeline,
         JsonPipelineDataFormat,
@@ -5844,7 +5893,6 @@ if TYPE_CHECKING:
         is_av_available,
         is_bitsandbytes_available,
         is_datasets_available,
-        is_decord_available,
         is_faiss_available,
         is_flax_available,
         is_keras_nlp_available,
@@ -5879,6 +5927,7 @@ if TYPE_CHECKING:
     from .utils.quantization_config import (
         AqlmConfig,
         AwqConfig,
+        BitNetConfig,
         BitsAndBytesConfig,
         CompressedTensorsConfig,
         EetqConfig,
@@ -6061,13 +6110,14 @@ if TYPE_CHECKING:
         from .models.deformable_detr import (
             DeformableDetrFeatureExtractor,
             DeformableDetrImageProcessor,
+            DeformableDetrImageProcessorFast,
         )
         from .models.deit import DeiTFeatureExtractor, DeiTImageProcessor
         from .models.deprecated.deta import DetaImageProcessor
         from .models.deprecated.efficientformer import EfficientFormerImageProcessor
         from .models.deprecated.tvlt import TvltImageProcessor
         from .models.deprecated.vit_hybrid import ViTHybridImageProcessor
-        from .models.detr import DetrFeatureExtractor, DetrImageProcessor
+        from .models.detr import DetrFeatureExtractor, DetrImageProcessor, DetrImageProcessorFast
         from .models.donut import DonutFeatureExtractor, DonutImageProcessor
         from .models.dpt import DPTFeatureExtractor, DPTImageProcessor
         from .models.efficientnet import EfficientNetImageProcessor
@@ -6124,7 +6174,7 @@ if TYPE_CHECKING:
         )
         from .models.pvt import PvtImageProcessor
         from .models.qwen2_vl import Qwen2VLImageProcessor
-        from .models.rt_detr import RTDetrImageProcessor
+        from .models.rt_detr import RTDetrImageProcessor, RTDetrImageProcessorFast
         from .models.sam import SamImageProcessor
         from .models.segformer import SegformerFeatureExtractor, SegformerImageProcessor
         from .models.seggpt import SegGptImageProcessor
@@ -6191,6 +6241,8 @@ if TYPE_CHECKING:
         )
         from .generation import (
             AlternatingCodebooksLogitsProcessor,
+            BayesianDetectorConfig,
+            BayesianDetectorModel,
             BeamScorer,
             BeamSearchScorer,
             ClassifierFreeGuidanceLogitsProcessor,
@@ -6229,6 +6281,9 @@ if TYPE_CHECKING:
             StopStringCriteria,
             SuppressTokensAtBeginLogitsProcessor,
             SuppressTokensLogitsProcessor,
+            SynthIDTextWatermarkDetector,
+            SynthIDTextWatermarkingConfig,
+            SynthIDTextWatermarkLogitsProcessor,
             TemperatureLogitsWarper,
             TopKLogitsWarper,
             TopPLogitsWarper,
@@ -7013,6 +7068,13 @@ if TYPE_CHECKING:
             GitPreTrainedModel,
             GitVisionModel,
         )
+        from .models.glm import (
+            GlmForCausalLM,
+            GlmForSequenceClassification,
+            GlmForTokenClassification,
+            GlmModel,
+            GlmPreTrainedModel,
+        )
         from .models.glpn import (
             GLPNForDepthEstimation,
             GLPNModel,
@@ -7332,6 +7394,7 @@ if TYPE_CHECKING:
         )
         from .models.mistral import (
             MistralForCausalLM,
+            MistralForQuestionAnswering,
             MistralForSequenceClassification,
             MistralForTokenClassification,
             MistralModel,
@@ -7339,6 +7402,7 @@ if TYPE_CHECKING:
         )
         from .models.mixtral import (
             MixtralForCausalLM,
+            MixtralForQuestionAnswering,
             MixtralForSequenceClassification,
             MixtralForTokenClassification,
             MixtralModel,
@@ -7388,6 +7452,12 @@ if TYPE_CHECKING:
             MobileViTV2ForSemanticSegmentation,
             MobileViTV2Model,
             MobileViTV2PreTrainedModel,
+        )
+        from .models.moshi import (
+            MoshiForCausalLM,
+            MoshiForConditionalGeneration,
+            MoshiModel,
+            MoshiPreTrainedModel,
         )
         from .models.mpnet import (
             MPNetForMaskedLM,
@@ -7473,6 +7543,11 @@ if TYPE_CHECKING:
             OlmoForCausalLM,
             OlmoModel,
             OlmoPreTrainedModel,
+        )
+        from .models.olmo_1124 import (
+            Olmo1124ForCausalLM,
+            Olmo1124Model,
+            Olmo1124PreTrainedModel,
         )
         from .models.olmoe import (
             OlmoeForCausalLM,
@@ -7634,6 +7709,7 @@ if TYPE_CHECKING:
         )
         from .models.qwen2 import (
             Qwen2ForCausalLM,
+            Qwen2ForQuestionAnswering,
             Qwen2ForSequenceClassification,
             Qwen2ForTokenClassification,
             Qwen2Model,
@@ -7646,6 +7722,7 @@ if TYPE_CHECKING:
         )
         from .models.qwen2_moe import (
             Qwen2MoeForCausalLM,
+            Qwen2MoeForQuestionAnswering,
             Qwen2MoeForSequenceClassification,
             Qwen2MoeForTokenClassification,
             Qwen2MoeModel,
