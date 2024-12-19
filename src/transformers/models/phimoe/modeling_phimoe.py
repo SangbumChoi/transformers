@@ -186,7 +186,6 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-# Copied from transformers.models.mixtral.modeling_mixtral.apply_rotary_pos_emb
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
     """Applies Rotary Position Embedding to the query and key tensors.
 
@@ -735,7 +734,7 @@ class PhimoeSparseMoeBlock(nn.Module):
     This implementation is
     strictly equivalent to standard MoE with full capacity (no
     dropped tokens). It's faster since it formulates MoE operations
-    in terms of block-sparse operations to accomodate imbalanced
+    in terms of block-sparse operations to accommodate imbalanced
     assignments of tokens to experts, whereas standard MoE either
     (1) drop tokens at the cost of reduced performance or (2) set
     capacity factor to number of experts and thus waste computation
@@ -912,10 +911,12 @@ class PhimoePreTrainedModel(PreTrainedModel):
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
     _no_split_modules = ["PhimoeDecoderLayer"]
-    _skip_keys_device_placement = "past_key_values"
+    _skip_keys_device_placement = ["past_key_values"]
     _supports_flash_attn_2 = True
     _supports_sdpa = True
     _supports_cache_class = True
+    _supports_quantized_cache = True
+    _supports_static_cache = True
 
     def _init_weights(self, module):
         std = self.config.initializer_range
