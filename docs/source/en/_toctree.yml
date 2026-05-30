@@ -1293,6 +1293,8 @@
         title: LFM2-VL
       - local: model_doc/lighton_ocr
         title: LightOnOcr
+      - local: model_doc/locateanything
+        title: LocateAnything
       - local: model_doc/lilt
         title: LiLT
       - local: model_doc/llama4
