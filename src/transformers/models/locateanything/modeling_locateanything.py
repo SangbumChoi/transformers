@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import time
-
 import numpy as np
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss
 
+from ...cache_utils import DynamicCache
 from ...generation import GenerationMixin
 from ...modeling_outputs import CausalLMOutputWithPast
 from ...modeling_utils import PreTrainedModel
@@ -29,14 +28,15 @@ from ...utils import (
     logging,
     torch_compilable_check,
 )
+from ..qwen2.modeling_qwen2 import Qwen2ForCausalLM
 from ..qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from .configuration_locateanything import LocateAnythingConfig
 from .generate_utils import (
+    build_window_attention_mask,
     get_token_ids_from_config,
     handle_pattern,
     sample_tokens,
 )
-from .modeling_qwen2 import Qwen2ForCausalLM
 from .modeling_vit import MoonVitPretrainedModel
 
 
@@ -374,20 +374,30 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
     def generate(
         self,
         pixel_values: torch.FloatTensor | None = None,
-        input_ids: torch.FloatTensor | None = None,
+        input_ids: torch.LongTensor | None = None,
         attention_mask: torch.LongTensor | None = None,
         visual_features: torch.FloatTensor | None = None,
         image_grid_hws: torch.Tensor | None = None,
         tokenizer=None,
         n_future_tokens: int = 6,
         **generate_kwargs,
-    ) -> torch.LongTensor:
-        verbose = generate_kwargs.pop("verbose", False)
-        start_time = time.time()
-        prefill_time = None
+    ) -> str:
+        r"""
+        Parallel Box Decoding (PBD) generation. Three modes are supported:
+
+        - `"slow"`: pure auto-regressive decoding.
+        - `"fast"`: block-wise multi-token prediction (MTP) only.
+        - `"hybrid"` (default): MTP first, falling back to AR on uncertain boxes.
+
+        The language model is the standard library decoder; the MTP block-diffusion attention
+        mask is built by [`~models.locateanything.generate_utils.build_window_attention_mask`]
+        and passed in as a 4D mask, and the speculative window is rolled back from the
+        [`~cache_utils.DynamicCache`] after each MTP step.
+        """
+        # `verbose` is accepted for backward compatibility but no longer drives any timing logic.
+        generate_kwargs.pop("verbose", False)
 
         pixel_values = pixel_values.to(self.language_model.dtype)
-        # Convert numpy array to tensor if needed
         if isinstance(image_grid_hws, np.ndarray):
             image_grid_hws = torch.from_numpy(image_grid_hws).to(pixel_values.device, dtype=torch.int32)
 
@@ -397,196 +407,120 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
         if not generate_kwargs.get("use_cache", False):
             raise ValueError("LocateAnything generation only supports `use_cache=True`.")
 
-        generated = input_ids.clone()
-        total_gen_length = min(tokenizer.model_max_length, seq_len + generate_kwargs.get("max_new_tokens", 2048))
-        iter_round = 0
-        past_key_values = None
-
-        # Extract visual features once before the loop
-        if visual_features is not None:
-            vit_embeds = visual_features
-        elif pixel_values is not None:
-            vit_embeds = self.extract_feature(pixel_values, image_grid_hws)
-        else:
-            vit_embeds = None
-
-        if image_grid_hws is not None:
-            vit_embeds = torch.cat(vit_embeds, dim=0)
-            vit_embeds = self.mlp1(vit_embeds)
-
-        # ==================== Generation Mode ====================
-        # 'fast'   : MTP only, never fall back to AR
-        # 'slow'   : AR only, pure auto-regressive decoding
-        # 'hybrid' : MTP first, fall back to AR on error, switch back on box_end
         generation_mode = generate_kwargs.get("generation_mode", "hybrid")
         if generation_mode not in ("fast", "slow", "hybrid"):
             raise ValueError(f"Unsupported generation_mode='{generation_mode}'. Use 'fast', 'slow', or 'hybrid'.")
 
-        sampling_history = []
+        device = input_ids.device
+        embed_tokens = self.language_model.get_input_embeddings()
+
+        # Build the prompt embeddings once, scattering the projected image features into the
+        # image placeholder positions (same merge used by `forward`).
+        if visual_features is not None:
+            vit_embeds = visual_features
+        elif pixel_values is not None:
+            vit_embeds = self.extract_feature(pixel_values, image_grid_hws)
+            vit_embeds = torch.cat(vit_embeds, dim=0)
+            vit_embeds = self.mlp1(vit_embeds)
+        else:
+            vit_embeds = None
+
+        prompt_embeds = embed_tokens(input_ids)
+        if vit_embeds is not None:
+            special_image_mask = self.get_placeholder_mask(
+                input_ids, inputs_embeds=prompt_embeds, image_features=vit_embeds
+            )
+            prompt_embeds = prompt_embeds.masked_scatter(special_image_mask, vit_embeds.to(prompt_embeds.dtype))
+
+        generated = input_ids.clone()
+        total_gen_length = min(tokenizer.model_max_length, seq_len + generate_kwargs.get("max_new_tokens", 2048))
+        past_key_values = None
 
         use_mtp = generation_mode in ("fast", "hybrid")
-        switch_to_ar_count = 0
-
-        # Pre-allocate mask tokens and position ids
+        block_size = n_future_tokens
         default_mask_token_id = self.token_ids["default_mask_token_id"]
         pre_mask_tokens = torch.full(
-            (batch_size, n_future_tokens - 1), default_mask_token_id, dtype=generated.dtype, device=generated.device
+            (batch_size, n_future_tokens - 1), default_mask_token_id, dtype=generated.dtype, device=device
         )
         max_possible_len = total_gen_length + n_future_tokens
-        full_position_ids = torch.arange(0, max_possible_len, device=generated.device).unsqueeze(0)
+        full_position_ids = torch.arange(0, max_possible_len, device=device).unsqueeze(0)
 
-        def _prepare_inputs_in_mtp(generated):
-            generated_with_mask = torch.cat(
-                (generated, generated[:, -1].unsqueeze(1), pre_mask_tokens), dim=1
-            )  # [batch_size, seq_len + 1 +  n_future_tokens - 1]
+        def _embed_new(sequence, past_len):
+            """Embed the not-yet-cached suffix of `sequence`, reusing merged prompt embeds for the prefill."""
+            if past_len == 0:
+                # First forward: the prompt (with merged image features) plus any appended tokens.
+                if sequence.size(1) > seq_len:
+                    return torch.cat([prompt_embeds, embed_tokens(sequence[:, seq_len:])], dim=1)
+                return prompt_embeds
+            return embed_tokens(sequence[:, past_len:])
 
-            # Update pe for kvcache
-            start_idx = past_key_values[0][0].size(2) if past_key_values is not None else 0
-            position_ids = full_position_ids[:, start_idx : generated_with_mask.size(1)].clone()
-            position_ids[0, -n_future_tokens:] -= 1
-
-            prepare_inputs = self.language_model.prepare_inputs_for_generation(
-                generated_with_mask,
-                past_key_values,
-                None,
-                inputs_embeds=None,
-                use_cache=True,
-                position_ids=position_ids,
-            )
-            return prepare_inputs
-
-        def _prepare_input_in_ar(generated):
-            start_idx = past_key_values[0][0].size(2) if past_key_values is not None else 0
-            position_ids = full_position_ids[:, start_idx : generated.size(1)]
-            prepare_inputs = self.language_model.prepare_inputs_for_generation(
-                generated, past_key_values, None, inputs_embeds=None, use_cache=True, position_ids=position_ids
-            )
-            return prepare_inputs
-
-        def _sample_token_in_mtp(generated, outputs):
-            """Sample tokens using MTP (Multi-Token Prediction) mode."""
-            next_token_logits = outputs.logits[:, -n_future_tokens:, :]
-            probs, confidence, x0, box_avg = sample_tokens(
-                next_token_logits, generated, self.token_ids, keep_k=5, **generate_kwargs
-            )
-
-            is_box_empty = (box_avg[0] == 0).all()
-            new_tokens = x0[0] if is_box_empty else box_avg[0]
-
-            out_pattern = handle_pattern(new_tokens, self.token_ids, generation_mode)
-            out_type = out_pattern["type"]
-            out_token = torch.tensor(out_pattern["tokens"], dtype=x0.dtype, device=x0.device)
-
-            return out_type, out_token
-
-        def _sample_token_in_ar(generated, outputs):
-            """Sample a single token using AR (Auto-Regressive) mode."""
-            next_token_logits = outputs.logits[:, -1:, :]
-            probs, confidence, x0, _ = sample_tokens(next_token_logits, generated, self.token_ids, **generate_kwargs)
-
-            out_token = x0[0]
-            out_type = "continue_ar"
-            token_val = out_token[0].item()
-
-            box_end_token_id = self.token_ids["box_end_token_id"]
-            coord_start_token_id = self.token_ids["coord_start_token_id"]
-            coord_end_token_id = self.token_ids["coord_end_token_id"]
-            none_token_id = self.token_ids["none_token_id"]
-            im_end_token_id = self.token_ids["im_end_token_id"]
-
-            if generation_mode == "hybrid":
-                # Hybrid AR phase: detect box boundaries to switch back to MTP
-                if token_val == box_end_token_id:
-                    out_type = "box_end_ar"
-                elif coord_start_token_id <= token_val <= coord_end_token_id or token_val == none_token_id:
-                    out_type = "coord_ar"
-                else:
-                    out_type = "im_end"
-            else:
-                # Slow mode: pure AR, only stop on im_end
-                if token_val == im_end_token_id:
-                    out_type = "im_end"
-
-            return out_type, out_token
-
-        # Generate loop
         while generated.size(1) < total_gen_length:
-            iter_round += 1
+            commit_len = generated.size(1)
+            past_len = past_key_values.get_seq_length() if past_key_values is not None else 0
 
-            # Step 1: Prepare inputs
             if use_mtp:
-                prepare_inputs = _prepare_inputs_in_mtp(generated)
-            else:
-                prepare_inputs = _prepare_input_in_ar(generated)
-
-            if iter_round == 1:
-                prepare_inputs.update(
-                    {
-                        "visual_features": vit_embeds,
-                        "image_token_index": self.config.image_token_index,
-                    }
+                sequence = torch.cat((generated, generated[:, -1:], pre_mask_tokens), dim=1)
+                position_ids = full_position_ids[:, past_len : sequence.size(1)].clone()
+                position_ids[0, -n_future_tokens:] -= 1
+                q_len = sequence.size(1) - past_len
+                attn = build_window_attention_mask(
+                    q_len, sequence.size(1), past_len, block_size, prompt_embeds.dtype, device
                 )
+            else:
+                sequence = generated
+                position_ids = full_position_ids[:, past_len : sequence.size(1)]
+                attn = torch.ones((batch_size, sequence.size(1)), dtype=torch.long, device=device)
 
-            # Step 2: Model forward & update KV cache
-            with torch.no_grad():
-                outputs = self.language_model(**prepare_inputs)
-
-            past_key_values = tuple(
-                (kv[0][:, :, : generated.shape[1], :], kv[1][:, :, : generated.shape[1], :])
-                for kv in outputs.past_key_values
+            inputs_embeds = _embed_new(sequence, past_len)
+            outputs = self.language_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attn,
+                position_ids=position_ids,
+                past_key_values=past_key_values if past_key_values is not None else DynamicCache(),
+                use_cache=True,
             )
+            past_key_values = outputs.past_key_values
+            # Roll back the speculative window so only committed tokens stay cached.
+            past_key_values.crop(commit_len)
 
-            # Step 3: Sample tokens
             if use_mtp:
-                out_type, out_token = _sample_token_in_mtp(generated, outputs)
-            else:
-                out_type, out_token = _sample_token_in_ar(generated, outputs)
-
-            if verbose:
-                sampling_history.append(
-                    ("ar" if "ar" in out_type else "mtp", tokenizer.decode(out_token, skip_special_tokens=False))
+                next_token_logits = outputs.logits[:, -n_future_tokens:, :]
+                _, _, x0, box_avg = sample_tokens(
+                    next_token_logits, generated, self.token_ids, keep_k=5, **generate_kwargs
                 )
+                is_box_empty = (box_avg[0] == 0).all()
+                new_tokens = x0[0] if is_box_empty else box_avg[0]
+                out_pattern = handle_pattern(new_tokens, self.token_ids, generation_mode)
+                out_type = out_pattern["type"]
+                out_token = torch.tensor(out_pattern["tokens"], dtype=generated.dtype, device=device)
+            else:
+                next_token_logits = outputs.logits[:, -1:, :]
+                _, _, x0, _ = sample_tokens(next_token_logits, generated, self.token_ids, **generate_kwargs)
+                out_token = x0[0]
+                out_type = self._classify_ar_token(out_token[0].item(), generation_mode)
 
             generated = torch.cat([generated, out_token.unsqueeze(0)], dim=1)
 
-            # Step 4: Mode switching & termination
             if out_type == "im_end":
                 break
-
             if generation_mode == "hybrid":
                 if out_type == "error_box":
                     use_mtp = False
-                    switch_to_ar_count += 1
                 elif out_type == "box_end_ar":
                     use_mtp = True
-            # fast mode: use_mtp stays True always
-            # slow mode: use_mtp stays False always
 
-            if prefill_time is None:
-                prefill_time = time.time() - start_time
-
-        # Decode and return
-        generated_ids = generated[:, seq_len:]
-        response = tokenizer.batch_decode(generated_ids, skip_special_tokens=False)
-
-        if verbose:
-            end_time = time.time()
-            num_tokens = generated_ids.size(1)
-            num_boxes = response[0].count("<box>")
-            total_time = end_time - start_time
-
-            out_info = (
-                f"\nStatistic Info, num_tokens={num_tokens}; "
-                f"generate_time(s)={total_time:.4f}; "
-                f"tps={(num_tokens / total_time):.4f}; "
-                f"forward_step={iter_round}; "
-                f"num_boxes={num_boxes}; "
-                f"bps={(num_boxes / total_time):.4f}; "
-                f"prefill_time={(prefill_time):.4f}; "
-                f"switch_to_ar={switch_to_ar_count}\n"
-            )
-            logger.info(out_info)
-
-            return response[0], sampling_history, out_info
-
+        response = tokenizer.batch_decode(generated[:, seq_len:], skip_special_tokens=False)
         return response[0]
+
+    def _classify_ar_token(self, token_val: int, generation_mode: str) -> str:
+        """Classify a single AR token to drive hybrid mode switching and termination."""
+        if generation_mode == "hybrid":
+            if token_val == self.token_ids["box_end_token_id"]:
+                return "box_end_ar"
+            if (
+                self.token_ids["coord_start_token_id"] <= token_val <= self.token_ids["coord_end_token_id"]
+                or token_val == self.token_ids["none_token_id"]
+            ):
+                return "coord_ar"
+            return "im_end"
+        return "im_end" if token_val == self.token_ids["im_end_token_id"] else "continue_ar"

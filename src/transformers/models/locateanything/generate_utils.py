@@ -18,6 +18,49 @@ import torch.distributions as dists
 import torch.nn.functional as F
 
 
+def build_window_attention_mask(
+    q_len: int,
+    kv_len: int,
+    past_len: int,
+    block_size: int,
+    dtype: torch.dtype,
+    device: torch.device,
+    causal_attn: bool = False,
+) -> torch.Tensor:
+    """Build the 4D block-diffusion attention mask for one multi-token-prediction (MTP) window.
+
+    The base is a standard causal mask (a query at global position `past_len + i` may attend to
+    key positions `<= past_len + i`). On top of that, the trailing `block_size` queries -- the
+    diffusion window of duplicated/masked tokens -- attend bidirectionally to the trailing
+    `block_size` keys, and the duplicated token column is masked out so it is not attended twice.
+
+    Args:
+        q_len (`int`): Number of query tokens forwarded this step (the not-yet-cached suffix).
+        kv_len (`int`): Total key/value length (cached prefix + `q_len`).
+        past_len (`int`): Length of the cached prefix (global offset of the first query).
+        block_size (`int`): Size of the diffusion window.
+        dtype (`torch.dtype`): Floating dtype of the mask.
+        device (`torch.device`): Device of the mask.
+        causal_attn (`bool`, *optional*, defaults to `False`): Keep strict causal masking inside
+            the window instead of making it bidirectional.
+
+    Returns:
+        `torch.Tensor`: A `(1, 1, q_len, kv_len)` additive mask (`0.0` for allowed, large negative
+        for masked positions).
+    """
+    min_val = torch.finfo(dtype).min
+    q_pos = torch.arange(q_len, device=device) + past_len
+    k_pos = torch.arange(kv_len, device=device)
+    allowed = k_pos[None, :] <= q_pos[:, None]
+    mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
+    mask.masked_fill_(~allowed, min_val)
+    if not causal_attn:
+        mask[-block_size:, -block_size:] = 0.0
+    # Mask the duplicated last committed token so it is not attended to inside the window.
+    mask[-block_size:, -block_size - 1] = min_val
+    return mask[None, None]
+
+
 def get_token_ids_from_config(config) -> dict[str, int]:
     """Extract all token IDs from the configuration object.
 
