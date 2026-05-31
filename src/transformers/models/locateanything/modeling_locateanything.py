@@ -182,6 +182,9 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
         else:
             self._no_split_modules = ["Qwen2DecoderLayer"]
 
+        # Initialize weights and set up tied-weight bookkeeping.
+        self.post_init()
+
     def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
         if not is_peft_available():
             raise ImportError("PEFT is required to enable LocateAnything vision backbone LoRA adapters.")
