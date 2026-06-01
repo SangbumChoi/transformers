@@ -30,7 +30,7 @@ from ...generation import GenerationMixin
 from ...modeling_outputs import CausalLMOutputWithPast
 from ...modeling_utils import PreTrainedModel
 from ...utils import (
-    add_start_docstrings,
+    auto_docstring,
     is_flash_attn_2_available,
     logging,
     torch_compilable_check,
@@ -514,6 +514,7 @@ def patch_merger(
     return outputs
 
 
+@auto_docstring
 class MoonVitPretrainedModel(PreTrainedModel):
     config_class = MoonViTConfig
     model_type = "moonvit"
@@ -1039,25 +1040,7 @@ def handle_pattern(x0, token_ids: dict[str, int], generation_mode: str = "hybrid
         }
 
 
-LOCATEANYTHING_START_DOCSTRING = r"""
-    This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
-    library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
-    etc.)
-    This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
-    Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
-    and behavior.
-    Parameters:
-        config ([`LocateAnythingConfig`]):
-            Model configuration class with all the parameters of the model. Initializing with a config file does not
-            load the weights associated with the model, only the configuration. Check out the
-            [`~PreTrainedModel.from_pretrained`] method to load the model weights.
-"""
-
-
-@add_start_docstrings(
-    "The bare LocateAnything Model outputting raw hidden-states without any specific head on top.",
-    LOCATEANYTHING_START_DOCSTRING,
-)
+@auto_docstring
 class LocateAnythingPreTrainedModel(PreTrainedModel):
     config_class = LocateAnythingConfig
     base_model_prefix = "model"
@@ -1094,6 +1077,9 @@ class LocateAnythingPreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
 
 
+@auto_docstring(
+    custom_intro="The LocateAnything model: a MoonViT vision tower and an MLP projector on top of a causal language model."
+)
 class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, GenerationMixin):
     config_class = LocateAnythingConfig
 
