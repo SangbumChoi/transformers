@@ -34,13 +34,7 @@ from ...cache_utils import DynamicCache
 from ...generation import GenerationMixin
 from ...modeling_outputs import CausalLMOutputWithPast
 from ...modeling_utils import PreTrainedModel
-from ...utils import (
-    add_start_docstrings,
-    is_flash_attn_2_available,
-    is_peft_available,
-    logging,
-    torch_compilable_check,
-)
+from ...utils import add_start_docstrings, is_flash_attn_2_available, logging, torch_compilable_check
 from ..auto import AutoModelForCausalLM
 from .configuration_locateanything import LocateAnythingConfig, MoonViTConfig
 
@@ -95,10 +89,12 @@ class MoonVisionPatchEmbed(nn.Module):
         pos_emb_width: int = 14,
     ):
         super().__init__()
-        assert isinstance(patch_size, (int, Sequence)), f"Invalid patch_size type: {type(patch_size)}"
+        if not isinstance(patch_size, (int, Sequence)):
+            raise TypeError(f"Invalid patch_size type: {type(patch_size)}")
         if isinstance(patch_size, int):
             patch_size = (patch_size, patch_size)
-        assert len(patch_size) == 2, f"Expected patch_size to be a tuple of 2, got {patch_size}"
+        if len(patch_size) != 2:
+            raise ValueError(f"Expected patch_size to be a tuple of 2, got {patch_size}")
         self.patch_size = patch_size
 
         self.proj = nn.Conv2d(in_dim, out_dim, kernel_size=patch_size, stride=patch_size)
@@ -145,7 +141,8 @@ class Rope2DPosEmb(nn.Module):
     def __init__(self, dim: int, max_height: int, max_width: int, theta_base=10000):
         super().__init__()
         self.dim = dim
-        assert self.dim % 4 == 0, "dim must be divisible by 4"
+        if self.dim % 4 != 0:
+            raise ValueError("dim must be divisible by 4")
         self.max_height = max_height
         self.max_width = max_width
         self.theta_base = theta_base
@@ -193,11 +190,8 @@ class Rope2DPosEmb(nn.Module):
             self.freqs_cis = self._precompute_freqs_cis(grid_hws.device)
 
         shapes = grid_hws.tolist()
-        assert all(1 <= h <= self.max_height and 1 <= w <= self.max_width for h, w in shapes), (
-            shapes,
-            self.max_height,
-            self.max_width,
-        )
+        if not all(1 <= h <= self.max_height and 1 <= w <= self.max_width for h, w in shapes):
+            raise ValueError(f"grid shapes {shapes} exceed the maximum ({self.max_height}, {self.max_width})")
         freqs_cis = torch.cat(
             [self.freqs_cis[:h, :w].reshape(-1, self.dim // 2) for h, w in shapes],
             dim=0,
@@ -214,7 +208,8 @@ class MLP2(nn.Module):
 
     def __init__(self, dims: list[int], activation, bias=True):
         super().__init__()
-        assert len(dims) == 3
+        if len(dims) != 3:
+            raise ValueError(f"MLP2 expects dims=[in_dim, hidden_dim, out_dim], got {dims}")
         self.fc0 = nn.Linear(dims[0], dims[1], bias=bias)
         self.fc1 = nn.Linear(dims[1], dims[2], bias=bias)
         self.activation = activation
@@ -261,13 +256,14 @@ def multihead_attention(
         )
 
     # Unified format legal check
-    assert q.dim() == k.dim() == v.dim() == 3, "q, k, v must have 3 dims"
-    assert q_cu_seqlens[-1] == q.shape[0], "q_cu_seqlens must sum to q.shape[0]"
-    assert k_cu_seqlens[-1] == k.shape[0] == v.shape[0], "k_cu_seqlens must sum to k.shape[0]"
-    assert q.dtype in [
-        torch.bfloat16,
-        torch.float16,
-    ], f"unsupported dtype {q.dtype} for multihead attn"
+    if not (q.dim() == k.dim() == v.dim() == 3):
+        raise ValueError("q, k, v must have 3 dims")
+    if q_cu_seqlens[-1] != q.shape[0]:
+        raise ValueError("q_cu_seqlens must sum to q.shape[0]")
+    if not (k_cu_seqlens[-1] == k.shape[0] == v.shape[0]):
+        raise ValueError("k_cu_seqlens must sum to k.shape[0]")
+    if q.dtype not in (torch.bfloat16, torch.float16):
+        raise ValueError(f"unsupported dtype {q.dtype} for multihead attn")
 
     max_seqlen_q = (q_cu_seqlens[1:] - q_cu_seqlens[:-1]).max().item()
     max_seqlen_k = (k_cu_seqlens[1:] - k_cu_seqlens[:-1]).max().item()
@@ -353,10 +349,14 @@ VL_VISION_ATTENTION_FUNCTIONS = {
 
 
 def _apply_rope_input_validation(x, freqs_cis):
-    assert x.ndim == freqs_cis.ndim + 1, (x.shape, freqs_cis.shape)
-    assert x.shape[:-2] == freqs_cis.shape[:-1], (x.shape, freqs_cis.shape)
-    assert x.shape[-1] == 2 * freqs_cis.shape[-1], (x.shape, freqs_cis.shape)
-    assert freqs_cis.dtype == torch.complex64, freqs_cis.dtype
+    if x.ndim != freqs_cis.ndim + 1:
+        raise ValueError(f"Invalid shapes: {x.shape}, {freqs_cis.shape}")
+    if x.shape[:-2] != freqs_cis.shape[:-1]:
+        raise ValueError(f"Invalid shapes: {x.shape}, {freqs_cis.shape}")
+    if x.shape[-1] != 2 * freqs_cis.shape[-1]:
+        raise ValueError(f"Invalid shapes: {x.shape}, {freqs_cis.shape}")
+    if freqs_cis.dtype != torch.complex64:
+        raise ValueError(f"freqs_cis must be complex64, got {freqs_cis.dtype}")
 
 
 def apply_rope(xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -585,7 +585,7 @@ class LocateAnythingPreTrainedModel(PreTrainedModel):
     base_model_prefix = "model"
     main_input_name = "input_ids"
     supports_gradient_checkpointing = True
-    _no_split_modules = ["Qwen2DecoderLayer"]
+    _no_split_modules = ["Qwen2DecoderLayer", "Qwen3DecoderLayer"]
     _skip_keys_device_placement = "past_key_values"
     _supports_flash_attn_2 = True
     _supports_cache_class = True
@@ -1146,74 +1146,11 @@ class LocateAnythingForConditionalGeneration(LocateAnythingPreTrainedModel, Gene
             nn.Linear(llm_hidden_size, llm_hidden_size),
         )
         self.image_token_index = config.image_token_index
-        self.neftune_alpha = None
-
-        if config.use_backbone_lora:
-            self.wrap_backbone_lora(r=config.use_backbone_lora, lora_alpha=2 * config.use_backbone_lora)
-
-        self.use_llm_lora = config.use_llm_lora
-        if config.use_llm_lora:
-            self.wrap_llm_lora(r=config.use_llm_lora, lora_alpha=2 * config.use_llm_lora)
 
         self.token_ids = get_token_ids_from_config(config)
 
-        # Set _no_split_modules dynamically based on the actual LLM architecture
-        arch = (
-            config.text_config.architectures[0]
-            if hasattr(config.text_config, "architectures") and config.text_config.architectures
-            else "Qwen2ForCausalLM"
-        )
-        if "Qwen3" in arch:
-            self._no_split_modules = ["Qwen3DecoderLayer"]
-        else:
-            self._no_split_modules = ["Qwen2DecoderLayer"]
-
         # Initialize weights and set up tied-weight bookkeeping.
         self.post_init()
-
-    def wrap_backbone_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
-        if not is_peft_available():
-            raise ImportError("PEFT is required to enable LocateAnything vision backbone LoRA adapters.")
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=r,
-            target_modules=[
-                "self_attn.q_proj",
-                "self_attn.k_proj",
-                "self_attn.v_proj",
-                "self_attn.out_proj",
-                "mlp.fc1",
-                "mlp.fc2",
-            ],
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-        )
-        self.vision_model = get_peft_model(self.vision_model, lora_config)
-
-    def wrap_llm_lora(self, r=128, lora_alpha=256, lora_dropout=0.05):
-        if not is_peft_available():
-            raise ImportError("PEFT is required to enable LocateAnything language model LoRA adapters.")
-        from peft import LoraConfig, get_peft_model
-
-        lora_config = LoraConfig(
-            r=r,
-            target_modules=[
-                "self_attn.q_proj",
-                "self_attn.k_proj",
-                "self_attn.v_proj",
-                "self_attn.o_proj",
-                "mlp.gate_proj",
-                "mlp.down_proj",
-                "mlp.up_proj",
-            ],
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            task_type="CAUSAL_LM",
-        )
-        self.language_model = get_peft_model(self.language_model, lora_config)
-        self.language_model.enable_input_require_grads()
-        self.use_llm_lora = True
 
     def get_image_features(
         self,
