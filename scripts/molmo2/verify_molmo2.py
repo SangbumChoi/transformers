@@ -269,7 +269,7 @@ def _hook_all(model, store: "HookStore", name_map: list[tuple[str, str]] | None)
 def build_inputs(model_id: str, image_url: str, prompt: str, device: str):
     from transformers import AutoProcessor
 
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=False)  # in-library
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # repo (remote) processor
     image = load_image(image_url)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": prompt}, {"type": "image", "image": image},
@@ -501,7 +501,7 @@ def cmd_demo(args) -> int:
         state_dict=convert_state_dict(original.state_dict()),
     ).eval()
     del original
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=False)  # in-library
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)  # repo (remote) processor
 
     # --- image grounding ---
     image = load_image(args.image)
@@ -539,7 +539,7 @@ def cmd_reference(args) -> int:
     model = AutoModelForImageTextToText.from_pretrained(
         args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
     ).to(args.device).eval()
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=False)  # in-library
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)  # repo (remote) processor
     image = load_image(args.image)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": args.prompt}, {"type": "image", "image": image},
