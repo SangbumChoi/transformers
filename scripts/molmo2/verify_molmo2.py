@@ -478,27 +478,35 @@ def cmd_parity_reference(args) -> int:
     ref_hidden = ref["block_hidden"]
     n_layers = min(ref_hidden.shape[0], port_hidden.shape[0])
 
-    print(f"\n=== per-layer hidden-state max-abs diff (text decoder, {n_layers} layers) ===")
-    print(f"{'layer':>6s} {'max_abs_diff':>14s} {'rel':>12s}")
+    print(f"\n=== per-layer hidden-state diff (text decoder, {n_layers} layers) ===")
+    print(f"{'layer':>6s} {'max_abs':>12s} {'max_rel':>10s} {'mean_abs':>12s} {'mean_rel':>10s}")
     per_layer = []
     for i in range(n_layers):
         a, b = ref_hidden[i], port_hidden[i]
-        d = (a - b).abs().max().item()
-        rel = d / (a.abs().max().item() or 1.0)
-        per_layer.append(d)
-        print(f"{i:>6d} {d:>14.3e} {rel:>12.2e}")
+        diff = (a - b).abs()
+        max_abs = diff.max().item()
+        mean_abs = diff.mean().item()
+        max_rel = max_abs / (a.abs().max().item() or 1.0)
+        mean_rel = mean_abs / (a.abs().mean().item() or 1.0)  # bulk divergence vs outlier channels
+        per_layer.append(max_abs)
+        print(f"{i:>6d} {max_abs:>12.3e} {max_rel:>10.2e} {mean_abs:>12.3e} {mean_rel:>10.2e}")
 
     logits_diff = (ref["logits_last"] - port_logits[0, -1]).abs().max().item()
     top1_ref = int(ref["logits_last"].argmax())
     top1_port = int(port_logits[0, -1].argmax())
     top1_match = top1_ref == top1_port
 
-    # Greedy-token agreement.
+    # Greedy-token agreement (drop input keys the port's generate path does not accept, e.g. the
+    # remote processor's token_type_ids).
     tokens_match, n_tok = None, 0
     try:
+        import inspect
+
+        fwd = set(inspect.signature(port.forward).parameters)
+        gen_inputs = {k: v for k, v in inputs.items() if k in fwd}
         n = inputs["input_ids"].shape[1]
         with torch.no_grad():
-            gen = port.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
+            gen = port.generate(**gen_inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
         port_tokens = gen[0, n:].cpu()
         ref_tokens = ref["generated_ids"]
         n_tok = min(len(ref_tokens), len(port_tokens))
