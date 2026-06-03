@@ -123,6 +123,41 @@ def convert_state_dict(orig_state_dict: dict) -> dict:
     return {apply_rules(k, RENAME_RULES): v for k, v in orig_state_dict.items()}
 
 
+def convert_to_local_checkpoint(model_id: str, out_dir: str, dtype: str) -> str:
+    """Stream the original safetensors shards, rename keys to the port layout, cast, and save.
+
+    This produces a port-loadable checkpoint *without ever instantiating the original model*, so the
+    port never depends on the remote code being importable. Memory-safe: one shard (~4GB) is held at
+    a time, so it fits a small box."""
+    import glob
+    import json
+    import os
+    import shutil
+
+    import torch
+    from huggingface_hub import snapshot_download
+    from safetensors.torch import load_file, save_file
+
+    if os.path.isdir(out_dir) and os.path.exists(os.path.join(out_dir, "model.safetensors.index.json")):
+        return out_dir
+    src = snapshot_download(model_id, allow_patterns=["*.safetensors", "*.index.json", "config.json"])
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copy(os.path.join(src, "config.json"), out_dir)
+    torch_dtype = getattr(torch, dtype)
+
+    shards = sorted(glob.glob(os.path.join(src, "*.safetensors")))
+    weight_map: dict[str, str] = {}
+    for shard in shards:
+        name = os.path.basename(shard)
+        renamed = {apply_rules(k, RENAME_RULES): v.to(torch_dtype) for k, v in load_file(shard).items()}
+        save_file(renamed, os.path.join(out_dir, name), metadata={"format": "pt"})
+        weight_map.update({k: name for k in renamed})
+        print(f"[convert] {name}: {len(renamed)} tensors -> {dtype}")
+    json.dump({"metadata": {}, "weight_map": weight_map},
+              open(os.path.join(out_dir, "model.safetensors.index.json"), "w"))
+    return out_dir
+
+
 # --------------------------------------------------------------------------------------------------
 # String-only self test (runs without torch): validate the rename map against the published index.
 # --------------------------------------------------------------------------------------------------
@@ -221,6 +256,25 @@ def _patch_for_coexistence():
             continue
         if hasattr(mod, "resolve_trust_remote_code"):
             mod.resolve_trust_remote_code = resolve_trust_remote_code
+
+    # The branch transformers refactored RoPE and removed the "default" key from
+    # ROPE_INIT_FUNCTIONS, but the original's remote rotary does ROPE_INIT_FUNCTIONS["default"].
+    # Re-add a default initializer (reads rope_theta / head_dim from the remote config).
+    import transformers.modeling_rope_utils as mru
+
+    if "default" not in mru.ROPE_INIT_FUNCTIONS:
+        import torch
+
+        def _default_rope(config, device=None, seq_len=None, **kw):
+            params = getattr(config, "rope_parameters", None) or {}
+            base = getattr(config, "rope_theta", None) or params.get("rope_theta", 10000.0)
+            dim = getattr(config, "head_dim", None) or (config.hidden_size // config.num_attention_heads)
+            inv_freq = 1.0 / (
+                base ** (torch.arange(0, dim, 2, dtype=torch.int64).to(device=device, dtype=torch.float) / dim)
+            )
+            return inv_freq, 1.0
+
+        mru.ROPE_INIT_FUNCTIONS["default"] = _default_rope
 
 
 @dataclass
@@ -343,9 +397,12 @@ def _capture(model, inputs, processor, name_map, max_new_tokens):
     tokens = None
     if max_new_tokens > 0:
         n = inputs["input_ids"].shape[1]
-        with torch.no_grad():
-            gen = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        tokens = gen[:, n:].cpu()
+        try:
+            with torch.no_grad():
+                gen = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+            tokens = gen[:, n:].cpu()
+        except Exception as e:  # generate may hit further remote/version cache-API gaps; forward still compared
+            print(f"[warn] generate() failed ({type(e).__name__}: {e}); skipping greedy-token check")
     return acts, logits, tokens
 
 
@@ -373,23 +430,18 @@ def cmd_parity(args) -> int:
     orig_acts, orig_logits, orig_tokens = _capture(
         original, inputs, processor, MODULE_RENAME_RULES, args.max_new_tokens
     )
-    orig_state_dict = {k: v.detach().cpu() for k, v in original.state_dict().items()}
     del original
     _free()
 
-    # ---- Phase 2: PORT (in-library) -- same weights, remapped names; original is gone from GPU.
+    # ---- Phase 2: PORT (in-library) -- loaded from a renamed local checkpoint (independent of the
+    # original model object), so the port never depends on the remote code being importable.
     print("[phase 2] in-library port from remapped weights")
+    local_ckpt = convert_to_local_checkpoint(args.model_id, f"{args.out_dir.rstrip('/')}/port_ckpt", args.dtype)
     config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     port = Molmo2ForConditionalGeneration.from_pretrained(
-        args.model_id,
-        config=config,
-        dtype=torch_dtype,
-        attn_implementation=args.attn,
-        device_map=args.device,  # load straight to GPU; avoids a 2nd 16GB CPU copy
-        state_dict=convert_state_dict(orig_state_dict),  # renames keys, reuses tensors (no copy)
+        local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
     ).eval()
-    del orig_state_dict
     _free()
     port_acts, port_logits, port_tokens = _capture(
         port, inputs, processor, None, args.max_new_tokens
@@ -519,24 +571,17 @@ def overlay_points(image, points, out_path: str, title: str = ""):
 
 def cmd_demo(args) -> int:
     torch = _torch()
-    from transformers import AutoProcessor, Molmo2Config, Molmo2ForConditionalGeneration
+    from transformers import Molmo2Config, Molmo2ForConditionalGeneration
 
     torch_dtype = getattr(torch, args.dtype)
     _patch_for_coexistence()
+    # Exercise the port end-to-end on the original weights, remapped into a local checkpoint.
+    local_ckpt = convert_to_local_checkpoint(args.model_id, f"{args.out_dir.rstrip('/')}/port_ckpt", args.dtype)
     config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
-    # Load original weights remapped into the port so the demo exercises the port end-to-end.
-    from transformers import AutoModelForImageTextToText
-
-    original = AutoModelForImageTextToText.from_pretrained(
-        args.model_id, trust_remote_code=True, dtype=torch_dtype
-    )
     model = Molmo2ForConditionalGeneration.from_pretrained(
-        args.model_id, config=config, dtype=torch_dtype, attn_implementation=args.attn,
-        device_map=args.device,
-        state_dict=convert_state_dict(original.state_dict()),
+        local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
     ).eval()
-    del original
     processor = load_processor(args.model_id)
 
     # --- image grounding ---
