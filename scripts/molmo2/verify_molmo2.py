@@ -166,31 +166,60 @@ def _torch():
     return torch
 
 
-def _make_registration_idempotent():
-    """Let the original's remote ``modeling_molmo2.py`` import even though the in-library molmo2 is
-    already registered.
+def _patch_for_coexistence():
+    """Make the original (remote code) and the in-library port loadable in one process.
 
-    The remote file calls ``AutoModelForImageTextToText.register(Molmo2Config, ...)`` at import time,
-    which raises ``'Molmo2Config' is already used`` once the in-library port occupies that slot. We
-    make the auto-mapping registration swallow that specific collision so both implementations can
-    coexist in one process (the port is used via its concrete class, not via Auto)."""
+    Two collisions to neutralize:
+
+    1. The remote ``modeling_molmo2.py`` calls ``AutoModelForImageTextToText.register(Molmo2Config,
+       ...)`` at import, which raises ``'Molmo2Config' is already used`` once the in-library port
+       owns that slot. We make auto-mapping registration swallow that specific collision.
+    2. ``AutoProcessor`` does not forward ``trust_remote_code`` to its sub-processors, so the image
+       processor resolves it as ``None`` and *raises* (it sees the repo's advertised custom code).
+       We default ``None -> False`` so sub-processors fall back to the in-library classes, while the
+       original model still loads remotely because we pass ``trust_remote_code=True`` explicitly."""
     import transformers.models.auto.auto_factory as af
 
     cls = af._LazyAutoMapping
-    if getattr(cls.register, "_idem", False):
-        return
-    orig = cls.register
+    if not getattr(cls.register, "_idem", False):
+        orig_register = cls.register
 
-    def register(self, key, value, exist_ok=False):
+        def register(self, key, value, exist_ok=False):
+            try:
+                return orig_register(self, key, value, exist_ok=True)
+            except ValueError as e:
+                if "already used" in str(e):
+                    return
+                raise
+
+        register._idem = True
+        cls.register = register
+
+    # Default trust_remote_code None -> False everywhere it is referenced (each auto module imported
+    # the symbol by name, so patch them individually).
+    import importlib
+
+    import transformers.dynamic_module_utils as dmu
+
+    orig_resolve = getattr(dmu.resolve_trust_remote_code, "_orig", dmu.resolve_trust_remote_code)
+
+    def resolve_trust_remote_code(trust_remote_code, *args, **kwargs):
+        if trust_remote_code is None:
+            return False
+        return orig_resolve(trust_remote_code, *args, **kwargs)
+
+    resolve_trust_remote_code._orig = orig_resolve
+    dmu.resolve_trust_remote_code = resolve_trust_remote_code
+    for modname in (
+        "auto_factory", "configuration_auto", "image_processing_auto", "processing_auto",
+        "tokenization_auto", "feature_extraction_auto", "video_processing_auto",
+    ):
         try:
-            return orig(self, key, value, exist_ok=True)
-        except ValueError as e:
-            if "already used" in str(e):
-                return
-            raise
-
-    register._idem = True
-    cls.register = register
+            mod = importlib.import_module(f"transformers.models.auto.{modname}")
+        except Exception:
+            continue
+        if hasattr(mod, "resolve_trust_remote_code"):
+            mod.resolve_trust_remote_code = resolve_trust_remote_code
 
 
 @dataclass
@@ -297,7 +326,7 @@ def cmd_parity(args) -> int:
     )
 
     torch_dtype = getattr(torch, args.dtype)
-    _make_registration_idempotent()  # allow the remote original to import alongside the in-library port
+    _patch_for_coexistence()  # allow the remote original to import alongside the in-library port
     processor, _, inputs = build_inputs(args.model_id, args.image, args.prompt, args.device)
 
     # ---- Phase 1: ORIGINAL (remote code) -- keep its weights on CPU for the port, then free GPU.
@@ -457,7 +486,7 @@ def cmd_demo(args) -> int:
     from transformers import AutoProcessor, Molmo2Config, Molmo2ForConditionalGeneration
 
     torch_dtype = getattr(torch, args.dtype)
-    _make_registration_idempotent()
+    _patch_for_coexistence()
     config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     # Load original weights remapped into the port so the demo exercises the port end-to-end.
@@ -506,7 +535,7 @@ def cmd_reference(args) -> int:
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     torch_dtype = getattr(torch, args.dtype)
-    _make_registration_idempotent()
+    _patch_for_coexistence()
     model = AutoModelForImageTextToText.from_pretrained(
         args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
     ).to(args.device).eval()
