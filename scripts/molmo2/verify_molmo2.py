@@ -267,10 +267,45 @@ def _hook_all(model, store: "HookStore", name_map: list[tuple[str, str]] | None)
             store.register(module, canonical)
 
 
-def build_inputs(model_id: str, image_url: str, prompt: str, device: str):
-    from transformers import AutoProcessor
+def load_processor(model_id: str):
+    """Build the in-library Molmo2Processor directly from concrete classes.
 
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)  # repo (remote) processor
+    The repo's remote processor is incompatible with the branch transformers (it passes
+    ``image_use_col_tokens`` to ``ProcessorMixin.__init__``, which now rejects unknown kwargs), and
+    ``AutoProcessor`` trips on remote-code resolution for the sub-image-processor. Constructing the
+    in-library components directly sidesteps both, while still reading the repo's configs."""
+    import json
+
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoTokenizer
+    from transformers.models.molmo2.image_processing_molmo2 import Molmo2ImageProcessor
+    from transformers.models.molmo2.processing_molmo2 import Molmo2Processor
+
+    image_processor = Molmo2ImageProcessor.from_pretrained(model_id)
+    try:
+        from transformers.models.molmo2.video_processing_molmo2 import Molmo2VideoProcessor
+
+        video_processor = Molmo2VideoProcessor.from_pretrained(model_id)
+    except Exception as e:  # video path is optional for image parity/demo
+        print(f"[warn] video processor unavailable ({e}); continuing without it")
+        video_processor = None
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+    chat_template = open(hf_hub_download(model_id, "chat_template.jinja")).read()
+    extra = json.load(open(hf_hub_download(model_id, "processor_config.json")))
+    for k in ("auto_map", "processor_class"):
+        extra.pop(k, None)
+    return Molmo2Processor(
+        image_processor=image_processor,
+        video_processor=video_processor,
+        tokenizer=tokenizer,
+        chat_template=chat_template,
+        **extra,
+    )
+
+
+def build_inputs(model_id: str, image_url: str, prompt: str, device: str):
+    processor = load_processor(model_id)
     image = load_image(image_url)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": prompt}, {"type": "image", "image": image},
@@ -502,7 +537,7 @@ def cmd_demo(args) -> int:
         state_dict=convert_state_dict(original.state_dict()),
     ).eval()
     del original
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)  # repo (remote) processor
+    processor = load_processor(args.model_id)
 
     # --- image grounding ---
     image = load_image(args.image)
@@ -540,7 +575,7 @@ def cmd_reference(args) -> int:
     model = AutoModelForImageTextToText.from_pretrained(
         args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
     ).to(args.device).eval()
-    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)  # repo (remote) processor
+    processor = load_processor(args.model_id)
     image = load_image(args.image)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": args.prompt}, {"type": "image", "image": image},
