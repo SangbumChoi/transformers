@@ -74,8 +74,10 @@ def main() -> int:
         messages, tokenize=True, add_generation_prompt=True, return_tensors="pt", return_dict=True,
     ).to(args.device)
 
-    # Capture each text-decoder block's output (residual stream after layer i).
+    # Capture each text-decoder block's output (residual stream after layer i), plus the input to
+    # block 0 (== inputs_embeds, after the image features are merged in) to isolate the vision path.
     blocks: dict[int, torch.Tensor] = {}
+    inputs_embeds_holder: dict[str, torch.Tensor] = {}
     handles = []
     for name, module in model.named_modules():
         m = BLOCK_RE.search(name)
@@ -90,6 +92,12 @@ def main() -> int:
                 return hook
 
             handles.append(module.register_forward_hook(make_hook(idx)))
+            if idx == 0:
+                def pre_hook(_m, args, kwargs):
+                    t = args[0] if args else kwargs.get("hidden_states")
+                    if torch.is_tensor(t):
+                        inputs_embeds_holder["x"] = t.detach().float().cpu()
+                handles.append(module.register_forward_pre_hook(pre_hook, with_kwargs=True))
 
     with torch.no_grad():
         out = model(**inputs, use_cache=False)
@@ -110,6 +118,7 @@ def main() -> int:
         "dtype": args.dtype, "attn": args.attn,
         "inputs": {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in inputs.items()},
         "block_hidden": block_hidden,
+        "inputs_embeds": (inputs_embeds_holder["x"][0] if "x" in inputs_embeds_holder else None),
         "logits_last": logits[0, -1],
         "logits_argmax": logits[0].argmax(-1),
         "generated_ids": tokens[0],

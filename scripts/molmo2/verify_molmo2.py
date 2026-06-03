@@ -424,10 +424,12 @@ def _load_reference(ref: str):
 
 
 def _capture_block_hidden(model, inputs):
-    """Forward the port and capture each text-decoder block output, stacked to [L, seq, hidden]."""
+    """Forward the port and capture each text-decoder block output (stacked to [L, seq, hidden])
+    plus the input to block 0 (== inputs_embeds, after image features are merged in)."""
     torch = _torch()
 
     blocks: dict[int, "torch.Tensor"] = {}
+    embeds: dict[str, "torch.Tensor"] = {}
     handles = []
     for name, module in model.named_modules():
         m = BLOCK_INDEX_RE.search(name)
@@ -442,12 +444,19 @@ def _capture_block_hidden(model, inputs):
                 return hook
 
             handles.append(module.register_forward_hook(make_hook(idx)))
+            if idx == 0:
+                def pre_hook(_m, args, kwargs):
+                    t = args[0] if args else kwargs.get("hidden_states")
+                    if torch.is_tensor(t):
+                        embeds["x"] = t.detach().float().cpu()
+                handles.append(module.register_forward_pre_hook(pre_hook, with_kwargs=True))
     out = _forward_filtered(model, dict(inputs))
     for h in handles:
         h.remove()
     num_layers = max(blocks) + 1
     block_hidden = torch.stack([blocks[i][0] for i in range(num_layers)])
-    return block_hidden, out.logits.float().cpu()
+    inputs_embeds = embeds["x"][0] if "x" in embeds else None
+    return block_hidden, out.logits.float().cpu(), inputs_embeds
 
 
 def cmd_parity_reference(args) -> int:
@@ -474,9 +483,37 @@ def cmd_parity_reference(args) -> int:
         local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
     ).eval()
 
-    port_hidden, port_logits = _capture_block_hidden(port, inputs)
+    port_hidden, port_logits, port_embeds = _capture_block_hidden(port, inputs)
     ref_hidden = ref["block_hidden"]
     n_layers = min(ref_hidden.shape[0], port_hidden.shape[0])
+
+    # ---- Vision-path isolation: split inputs_embeds diff by image vs text positions.
+    # Image positions merge in image features additively, so the text embedding cancels and the diff
+    # there == the image-feature diff; text positions should be ~0 (identical ids + embedding table).
+    ref_embeds = ref.get("inputs_embeds")
+    if ref_embeds is not None and port_embeds is not None:
+        ids = inputs["input_ids"][0].cpu()
+        image_token_id = getattr(config, "image_token_id", None)
+        d = (ref_embeds - port_embeds).abs()  # [seq, hidden]
+        per_pos = d.amax(dim=-1)
+        print("\n=== inputs_embeds (text-layer 0 input) -- vision-path isolation ===")
+        print(f"overall   : max={d.max().item():.3e}  mean={d.mean().item():.3e}")
+        if image_token_id is not None:
+            img_mask = ids == image_token_id
+            txt_mask = ~img_mask
+            n_img = int(img_mask.sum())
+            print(f"image_token_id={image_token_id}  image_positions={n_img}  text_positions={int(txt_mask.sum())}")
+            if n_img:
+                di = d[img_mask]
+                print(f"image pos : max={di.max().item():.3e}  mean={di.mean().item():.3e}")
+            if int(txt_mask.sum()):
+                dt = d[txt_mask]
+                print(f"text  pos : max={dt.max().item():.3e}  mean={dt.mean().item():.3e}")
+        order = per_pos.argsort(descending=True)[:8]
+        print("top-8 divergent positions (pos, input_id, max_abs_diff):")
+        for p in order.tolist():
+            tag = "IMG" if (image_token_id is not None and int(ids[p]) == image_token_id) else "txt"
+            print(f"  pos={p:>4d} id={int(ids[p]):>6d} [{tag}] diff={per_pos[p].item():.3e}")
 
     print(f"\n=== per-layer hidden-state diff (text decoder, {n_layers} layers) ===")
     print(f"{'layer':>6s} {'max_abs':>12s} {'max_rel':>10s} {'mean_abs':>12s} {'mean_rel':>10s}")
