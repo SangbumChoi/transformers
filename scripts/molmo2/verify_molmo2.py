@@ -436,7 +436,7 @@ def cmd_parity(args) -> int:
     # ---- Phase 2: PORT (in-library) -- loaded from a renamed local checkpoint (independent of the
     # original model object), so the port never depends on the remote code being importable.
     print("[phase 2] in-library port from remapped weights")
-    local_ckpt = convert_to_local_checkpoint(args.model_id, f"{args.out_dir.rstrip('/')}/port_ckpt", args.dtype)
+    local_ckpt = convert_to_local_checkpoint(args.model_id, "/tmp/molmo2_port_ckpt", args.dtype)
     config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     port = Molmo2ForConditionalGeneration.from_pretrained(
@@ -530,20 +530,30 @@ NUM_RE = re.compile(r"[-+]?\d*\.?\d+")
 def parse_points(text: str) -> list[tuple[float, float]]:
     """Parse normalized (0-100) points from Molmo2 grounding output.
 
-    Handles both ``<point x="..." y="..."/>`` / ``<point x1=.. y1=.. x2=.. y2=..>`` and the
-    ``<points coords="t,id,x,y ...">`` payload used for video. Returns (x, y) in 0-100 space.
-    """
+    Molmo2 emits ``<points coords="<count> <id> <x> <y> [<id> <x> <y> ...]">label</points>`` where
+    coordinates are on a 0-1000 grid (observed: ``coords="1 1 577 495"`` -> one point at id 1,
+    x=577, y=495). Also handles the legacy ``<point x=".." y="..">`` attribute style. Returns points
+    on a 0-100 scale; the scale is auto-detected (values >100 imply the 0-1000 grid)."""
     pts: list[tuple[float, float]] = []
     for x, y in POINT_RE.findall(text):
         pts.append((float(x), float(y)))
-    if not pts:
-        for coords in POINTS_COORDS_RE.findall(text):
-            nums = [float(n) for n in NUM_RE.findall(coords)]
-            # Coords groups are timestamp/id-prefixed; take trailing (x, y) pairs heuristically.
-            for i in range(0, len(nums) - 1, 2):
-                x, y = nums[i], nums[i + 1]
-                if 0 <= x <= 100 and 0 <= y <= 100:
-                    pts.append((x, y))
+
+    for coords in POINTS_COORDS_RE.findall(text):
+        nums = [float(n) for n in NUM_RE.findall(coords)]
+        if not nums:
+            continue
+        count = int(nums[0]) if nums[0].is_integer() else None
+        rest = nums[1:]
+        if count is not None and count > 0 and len(rest) == count * 3:
+            pts += [(rest[3 * i + 1], rest[3 * i + 2]) for i in range(count)]  # (id, x, y) triples
+        elif count is not None and count > 0 and len(rest) == count * 2:
+            pts += [(rest[2 * i], rest[2 * i + 1]) for i in range(count)]  # (x, y) pairs
+        else:  # fallback: pair up all numbers
+            pts += [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
+
+    if pts:
+        scale = 1000.0 if max(max(x, y) for x, y in pts) > 100 else 100.0
+        pts = [(x / scale * 100.0, y / scale * 100.0) for x, y in pts]
     return pts
 
 
@@ -576,7 +586,7 @@ def cmd_demo(args) -> int:
     torch_dtype = getattr(torch, args.dtype)
     _patch_for_coexistence()
     # Exercise the port end-to-end on the original weights, remapped into a local checkpoint.
-    local_ckpt = convert_to_local_checkpoint(args.model_id, f"{args.out_dir.rstrip('/')}/port_ckpt", args.dtype)
+    local_ckpt = convert_to_local_checkpoint(args.model_id, "/tmp/molmo2_port_ckpt", args.dtype)
     config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     model = Molmo2ForConditionalGeneration.from_pretrained(
@@ -601,8 +611,18 @@ def cmd_demo(args) -> int:
     print(f"=== parsed {len(pts)} point(s) (normalized 0-100) ===")
     for i, (x, y) in enumerate(pts):
         print(f"  [{i}] x={x:.2f} y={y:.2f}")
-    overlay_points(image, pts, f"{args.out_dir.rstrip('/')}/molmo2_image_points.png",
-                   title=args.prompt)
+    png_path = f"{args.out_dir.rstrip('/')}/molmo2_image_points.png"
+    overlay_points(image, pts, png_path, title=args.prompt)
+    # Emit the overlay inline (base64) so it is retrievable from job logs without extra storage.
+    import base64
+    import os
+
+    data = open(png_path, "rb").read()
+    if len(data) < 3_000_000:
+        print("BEGIN_PNG_B64")
+        print(base64.b64encode(data).decode())
+        print("END_PNG_B64")
+    print(f"[done] overlay bytes={len(data)} at {os.path.abspath(png_path)}")
     return 0
 
 
