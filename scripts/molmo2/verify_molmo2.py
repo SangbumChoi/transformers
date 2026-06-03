@@ -406,7 +406,134 @@ def _capture(model, inputs, processor, name_map, max_new_tokens):
     return acts, logits, tokens
 
 
+BLOCK_INDEX_RE = re.compile(r"model\.language_model\.blocks\.(\d+)$")  # port text-decoder block names
+
+
+def _load_reference(ref: str):
+    """Load a reference dump produced by reference_molmo2.py (local path or HF dataset repo id)."""
+    torch = _torch()
+    import os
+
+    if os.path.exists(ref):
+        path = ref
+    else:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(repo_id=ref, filename="reference.pt", repo_type="dataset")
+    return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def _capture_block_hidden(model, inputs):
+    """Forward the port and capture each text-decoder block output, stacked to [L, seq, hidden]."""
+    torch = _torch()
+
+    blocks: dict[int, "torch.Tensor"] = {}
+    handles = []
+    for name, module in model.named_modules():
+        m = BLOCK_INDEX_RE.search(name)
+        if m:
+            idx = int(m.group(1))
+
+            def make_hook(i):
+                def hook(_m, _inp, out):
+                    t = out[0] if isinstance(out, (tuple, list)) else out
+                    if torch.is_tensor(t):
+                        blocks[i] = t.detach().float().cpu()
+                return hook
+
+            handles.append(module.register_forward_hook(make_hook(idx)))
+    out = _forward_filtered(model, dict(inputs))
+    for h in handles:
+        h.remove()
+    num_layers = max(blocks) + 1
+    block_hidden = torch.stack([blocks[i][0] for i in range(num_layers)])
+    return block_hidden, out.logits.float().cpu()
+
+
+def cmd_parity_reference(args) -> int:
+    """Compare the in-library port against a saved reference dump of the original (cross-version)."""
+    torch = _torch()
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from transformers import Molmo2Config, Molmo2ForConditionalGeneration
+
+    print(f"[ref] loading reference: {args.reference}")
+    ref = _load_reference(args.reference)
+    inputs = {k: (v.to(args.device) if torch.is_tensor(v) else v) for k, v in ref["inputs"].items()}
+    print(f"[ref] original dtype={ref.get('dtype')} attn={ref.get('attn')} prompt={ref.get('prompt')!r} "
+          f"layers={ref['block_hidden'].shape[0]} seq={ref['block_hidden'].shape[1]}")
+
+    torch_dtype = getattr(torch, args.dtype)
+    _patch_for_coexistence()
+    local_ckpt = convert_to_local_checkpoint(args.model_id, "/tmp/molmo2_port_ckpt", args.dtype)
+    config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
+    config._attn_implementation = args.attn
+    port = Molmo2ForConditionalGeneration.from_pretrained(
+        local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
+    ).eval()
+
+    port_hidden, port_logits = _capture_block_hidden(port, inputs)
+    ref_hidden = ref["block_hidden"]
+    n_layers = min(ref_hidden.shape[0], port_hidden.shape[0])
+
+    print(f"\n=== per-layer hidden-state max-abs diff (text decoder, {n_layers} layers) ===")
+    print(f"{'layer':>6s} {'max_abs_diff':>14s} {'rel':>12s}")
+    per_layer = []
+    for i in range(n_layers):
+        a, b = ref_hidden[i], port_hidden[i]
+        d = (a - b).abs().max().item()
+        rel = d / (a.abs().max().item() or 1.0)
+        per_layer.append(d)
+        print(f"{i:>6d} {d:>14.3e} {rel:>12.2e}")
+
+    logits_diff = (ref["logits_last"] - port_logits[0, -1]).abs().max().item()
+    top1_ref = int(ref["logits_last"].argmax())
+    top1_port = int(port_logits[0, -1].argmax())
+    top1_match = top1_ref == top1_port
+
+    # Greedy-token agreement.
+    tokens_match, n_tok = None, 0
+    try:
+        n = inputs["input_ids"].shape[1]
+        with torch.no_grad():
+            gen = port.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
+        port_tokens = gen[0, n:].cpu()
+        ref_tokens = ref["generated_ids"]
+        n_tok = min(len(ref_tokens), len(port_tokens))
+        tokens_match = bool((ref_tokens[:n_tok] == port_tokens[:n_tok]).all())
+    except Exception as e:
+        print(f"[warn] port generate failed ({type(e).__name__}: {e})")
+
+    print("\n=== summary ===")
+    print(f"worst layer diff  : layer {int(max(range(n_layers), key=lambda i: per_layer[i]))} "
+          f"= {max(per_layer):.3e}")
+    print(f"final logits diff : {logits_diff:.3e}")
+    print(f"argmax next token : ref={top1_ref} port={top1_port} ({'MATCH' if top1_match else 'MISMATCH'})")
+    if tokens_match is not None:
+        print(f"greedy tokens     : {'MATCH' if tokens_match else 'MISMATCH'} over {n_tok} tokens")
+
+    fig, ax = plt.subplots(figsize=(13, 5))
+    ax.bar(range(n_layers), per_layer)
+    ax.set_yscale("log")
+    ax.set_xlabel("text decoder layer")
+    ax.set_ylabel("max abs diff (log)")
+    ax.set_title(f"Molmo2 original (ref) vs port -- per-layer hidden-state diff | logits diff {logits_diff:.2e}")
+    fig.tight_layout()
+    _ensure_dir(args.out_dir)
+    out_path = f"{args.out_dir.rstrip('/')}/molmo2_parity.png"
+    fig.savefig(out_path, dpi=120)
+    print(f"[saved] {out_path}")
+
+    ok = top1_match and (tokens_match in (None, True))
+    print(f"\nPARITY {'PASS' if ok else 'FAIL'} (token-based; logits diff reported for reference)")
+    return 0 if ok else 1
+
+
 def cmd_parity(args) -> int:
+    if getattr(args, "reference", None):
+        return cmd_parity_reference(args)
     torch = _torch()
     import matplotlib
 
@@ -703,6 +830,9 @@ def main() -> int:
     sp = sub.add_parser("parity", help="layer-by-layer + logits parity, original vs port")
     common(sp)
     sp.add_argument("--tol", type=float, default=2e-2, help="max-abs logits diff to pass")
+    sp.add_argument("--reference", default=None,
+                    help="reference dump (local path or HF dataset repo id) from reference_molmo2.py; "
+                         "compares the port against it instead of loading the original in-process")
 
     sp = sub.add_parser("demo", help="run the port, parse grounding points, save overlay")
     common(sp)
