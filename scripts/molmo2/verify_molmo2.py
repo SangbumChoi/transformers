@@ -3,6 +3,7 @@
 # dependencies = [
 #     "transformers @ git+https://github.com/SangbumChoi/transformers.git@molmo2",
 #     "torch",
+#     "torchvision",
 #     "accelerate",
 #     "pillow",
 #     "requests",
