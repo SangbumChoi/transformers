@@ -293,8 +293,9 @@ def cmd_parity(args) -> int:
         config=config,
         dtype=torch_dtype,
         attn_implementation=args.attn,
+        device_map=args.device,  # load straight to GPU; avoids a 2nd 16GB CPU copy
         state_dict=convert_state_dict(orig_state_dict),  # renames keys, reuses tensors (no copy)
-    ).to(args.device).eval()
+    ).eval()
     del orig_state_dict
     _free()
     port_acts, port_logits, port_tokens = _capture(
@@ -438,8 +439,9 @@ def cmd_demo(args) -> int:
     )
     model = Molmo2ForConditionalGeneration.from_pretrained(
         args.model_id, config=config, dtype=torch_dtype, attn_implementation=args.attn,
+        device_map=args.device,
         state_dict=convert_state_dict(original.state_dict()),
-    ).to(args.device).eval()
+    ).eval()
     del original
     processor = AutoProcessor.from_pretrained(args.model_id)  # in-library Molmo2Processor
 
