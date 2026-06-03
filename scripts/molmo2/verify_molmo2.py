@@ -457,6 +457,9 @@ def cmd_demo(args) -> int:
     print("=== image generation ===")
     print(text)
     pts = parse_points(text)
+    print(f"=== parsed {len(pts)} point(s) (normalized 0-100) ===")
+    for i, (x, y) in enumerate(pts):
+        print(f"  [{i}] x={x:.2f} y={y:.2f}")
     overlay_points(image, pts, f"{args.out_dir.rstrip('/')}/molmo2_image_points.png",
                    title=args.prompt)
     return 0
