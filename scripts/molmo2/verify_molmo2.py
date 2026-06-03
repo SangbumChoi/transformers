@@ -190,27 +190,24 @@ class HookStore:
         self.handles.clear()
 
 
-def build_models(model_id: str, dtype: str, device: str, attn: str):
+def _free(*objs):
+    """Drop references and reclaim GPU memory between the two parity phases."""
+    import gc
+
     torch = _torch()
-    from transformers import AutoModelForImageTextToText, Molmo2Config, Molmo2ForConditionalGeneration
+    for _ in objs:
+        pass
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    torch_dtype = getattr(torch, dtype)
-    print(f"[load] original (remote code) {model_id} dtype={dtype} attn={attn}")
-    original = AutoModelForImageTextToText.from_pretrained(
-        model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=attn
-    ).to(device).eval()
 
-    print("[load] in-library port from same config + remapped weights")
-    config = Molmo2Config.from_pretrained(model_id)
-    config._attn_implementation = attn
-    port = Molmo2ForConditionalGeneration.from_pretrained(
-        model_id,  # config only; weights overwritten below
-        config=config,
-        dtype=torch_dtype,
-        attn_implementation=attn,
-        state_dict=convert_state_dict(original.state_dict()),
-    ).to(device).eval()
-    return original, port
+def _hook_all(model, store: "HookStore", name_map: list[tuple[str, str]] | None):
+    """Register a forward hook on every named module, keyed by its canonical (port) name."""
+    for name, module in model.named_modules():
+        canonical = apply_rules(name, name_map) if name_map else name
+        if canonical:
+            store.register(module, canonical)
 
 
 def build_inputs(model_id: str, image_url: str, prompt: str, device: str):
@@ -239,77 +236,108 @@ def _forward_filtered(model, inputs: dict):
         return model(**kw, use_cache=False, output_hidden_states=True)
 
 
+def _capture(model, inputs, processor, name_map, max_new_tokens):
+    """Run one model: capture per-module activations, final logits, and greedy tokens.
+
+    Runs a single model at a time so only one 8B copy lives on the GPU (fits a 24GB card).
+    """
+    torch = _torch()
+    store = HookStore()
+    _hook_all(model, store, name_map)
+    out = _forward_filtered(model, dict(inputs))
+    acts = dict(store.outputs)
+    store.clear()
+    logits = out.logits.float().cpu()
+    tokens = None
+    if max_new_tokens > 0:
+        n = inputs["input_ids"].shape[1]
+        with torch.no_grad():
+            gen = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        tokens = gen[:, n:].cpu()
+    return acts, logits, tokens
+
+
 def cmd_parity(args) -> int:
     torch = _torch()
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from transformers import (
+        AutoModelForImageTextToText,
+        Molmo2Config,
+        Molmo2ForConditionalGeneration,
+    )
 
-    original, port = build_models(args.model_id, args.dtype, args.device, args.attn)
+    torch_dtype = getattr(torch, args.dtype)
     processor, _, inputs = build_inputs(args.model_id, args.image, args.prompt, args.device)
 
-    # Pair modules by name using the (original -> port) module rename map.
-    orig_modules = dict(original.named_modules())
-    port_modules = dict(port.named_modules())
-    pairs: list[tuple[str, str]] = []  # (canonical port name, original name)
-    for oname in orig_modules:
-        pname = apply_rules(oname, MODULE_RENAME_RULES)
-        if pname in port_modules and pname != "":
-            pairs.append((pname, oname))
+    # ---- Phase 1: ORIGINAL (remote code) -- keep its weights on CPU for the port, then free GPU.
+    print(f"[phase 1] original (remote code) {args.model_id} dtype={args.dtype} attn={args.attn}")
+    original = AutoModelForImageTextToText.from_pretrained(
+        args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
+    ).to(args.device).eval()
+    orig_acts, orig_logits, orig_tokens = _capture(
+        original, inputs, processor, MODULE_RENAME_RULES, args.max_new_tokens
+    )
+    orig_state_dict = {k: v.detach().cpu() for k, v in original.state_dict().items()}
+    del original
+    _free()
 
-    orig_store, port_store = HookStore(), HookStore()
-    for pname, oname in pairs:
-        orig_store.register(orig_modules[oname], pname)
-        port_store.register(port_modules[pname], pname)
+    # ---- Phase 2: PORT (in-library) -- same weights, remapped names; original is gone from GPU.
+    print("[phase 2] in-library port from remapped weights")
+    config = Molmo2Config.from_pretrained(args.model_id)
+    config._attn_implementation = args.attn
+    port = Molmo2ForConditionalGeneration.from_pretrained(
+        args.model_id,
+        config=config,
+        dtype=torch_dtype,
+        attn_implementation=args.attn,
+        state_dict=convert_state_dict(orig_state_dict),  # renames keys, reuses tensors (no copy)
+    ).to(args.device).eval()
+    del orig_state_dict
+    _free()
+    port_acts, port_logits, port_tokens = _capture(
+        port, inputs, processor, None, args.max_new_tokens
+    )
+    del port
+    _free()
 
-    print(f"[run] forward pass through {len(pairs)} matched modules")
-    out_orig = _forward_filtered(original, dict(inputs))
-    out_port = _forward_filtered(port, dict(inputs))
-    orig_store.clear()
-    port_store.clear()
-
-    # Per-module diffs.
+    # ---- Phase 3: compare ----
     rows = []
-    for pname in sorted(set(orig_store.outputs) & set(port_store.outputs)):
-        a, b = orig_store.outputs[pname], port_store.outputs[pname]
+    for name in sorted(set(orig_acts) & set(port_acts)):
+        a, b = orig_acts[name], port_acts[name]
         if a.shape != b.shape:
-            rows.append((pname, float("nan"), f"shape mismatch {tuple(a.shape)} vs {tuple(b.shape)}"))
+            rows.append((name, float("nan"), f"shape mismatch {tuple(a.shape)} vs {tuple(b.shape)}"))
             continue
         max_abs = (a - b).abs().max().item()
         denom = a.abs().max().item() or 1.0
-        rows.append((pname, max_abs, f"rel={max_abs / denom:.2e}"))
+        rows.append((name, max_abs, f"rel={max_abs / denom:.2e}"))
 
     rows.sort(key=lambda r: (r[1] != r[1], -r[1]))  # NaNs first, then largest diff
-    print("\n=== per-module max-abs diff (top 25) ===")
+    print(f"\n=== per-module max-abs diff (top 25 of {len(rows)} matched) ===")
     print(f"{'module':70s} {'max_abs_diff':>14s}  note")
     for name, diff, note in rows[:25]:
         print(f"{name:70s} {diff:>14.3e}  {note}")
 
-    logits_diff = (out_orig.logits.float() - out_port.logits.float()).abs().max().item()
-    top1_orig = out_orig.logits[0, -1].argmax().item()
-    top1_port = out_port.logits[0, -1].argmax().item()
+    logits_diff = (orig_logits - port_logits).abs().max().item()
+    top1_orig = orig_logits[0, -1].argmax().item()
+    top1_port = port_logits[0, -1].argmax().item()
+    top1_match = top1_orig == top1_port
     print("\n=== summary ===")
     worst = next((r for r in rows if r[1] == r[1]), ("-", 0.0, ""))
     print(f"worst module diff : {worst[0]} = {worst[1]:.3e}")
     print(f"final logits diff : {logits_diff:.3e}")
     print(f"argmax next token : original={top1_orig} port={top1_port} "
-          f"({'MATCH' if top1_orig == top1_port else 'MISMATCH'})")
+          f"({'MATCH' if top1_match else 'MISMATCH'})")
 
-    # Greedy-token agreement over a short continuation.
-    if args.max_new_tokens > 0:
-        gen_kwargs = dict(max_new_tokens=args.max_new_tokens, do_sample=False)
-        with torch.no_grad():
-            g_orig = original.generate(**inputs, **gen_kwargs)
-            g_port = port.generate(**inputs, **gen_kwargs)
-        n = inputs["input_ids"].shape[1]
-        t_orig = g_orig[:, n:]
-        t_port = g_port[:, n:]
-        m = min(t_orig.shape[1], t_port.shape[1])
-        match = bool((t_orig[:, :m] == t_port[:, :m]).all())
-        print(f"greedy tokens     : {'MATCH' if match else 'MISMATCH'} over {m} tokens")
-        print("  original:", processor.batch_decode(t_orig, skip_special_tokens=True)[0])
-        print("  port    :", processor.batch_decode(t_port, skip_special_tokens=True)[0])
+    tokens_match = True
+    if orig_tokens is not None and port_tokens is not None:
+        m = min(orig_tokens.shape[1], port_tokens.shape[1])
+        tokens_match = bool((orig_tokens[:, :m] == port_tokens[:, :m]).all())
+        print(f"greedy tokens     : {'MATCH' if tokens_match else 'MISMATCH'} over {m} tokens")
+        print("  original:", processor.batch_decode(orig_tokens, skip_special_tokens=True)[0])
+        print("  port    :", processor.batch_decode(port_tokens, skip_special_tokens=True)[0])
 
     # Plot per-module diffs (text blocks + vision layers separated).
     def subset(tag):
@@ -333,8 +361,15 @@ def cmd_parity(args) -> int:
     fig.savefig(out_path, dpi=120)
     print(f"\n[saved] {out_path}")
 
-    ok = logits_diff < args.tol and top1_orig == top1_port
-    print(f"\nPARITY {'PASS' if ok else 'FAIL'} (tol={args.tol:g})")
+    # In bf16/fp16 the absolute logits diff between two implementations is not a meaningful gate
+    # (low-precision accumulation order differs), so PASS is decided by token agreement; the logits
+    # diff is reported and additionally gated only in float32.
+    ok = top1_match and tokens_match
+    if args.dtype == "float32":
+        ok = ok and logits_diff < args.tol
+    print(f"\nlogits diff {logits_diff:.3e} (fp32 gate tol={args.tol:g}) | "
+          f"argmax {'OK' if top1_match else 'X'} | greedy {'OK' if tokens_match else 'X'}")
+    print(f"PARITY {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
 
 
