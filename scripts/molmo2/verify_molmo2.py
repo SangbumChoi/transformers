@@ -166,6 +166,33 @@ def _torch():
     return torch
 
 
+def _make_registration_idempotent():
+    """Let the original's remote ``modeling_molmo2.py`` import even though the in-library molmo2 is
+    already registered.
+
+    The remote file calls ``AutoModelForImageTextToText.register(Molmo2Config, ...)`` at import time,
+    which raises ``'Molmo2Config' is already used`` once the in-library port occupies that slot. We
+    make the auto-mapping registration swallow that specific collision so both implementations can
+    coexist in one process (the port is used via its concrete class, not via Auto)."""
+    import transformers.models.auto.auto_factory as af
+
+    cls = af._LazyAutoMapping
+    if getattr(cls.register, "_idem", False):
+        return
+    orig = cls.register
+
+    def register(self, key, value, exist_ok=False):
+        try:
+            return orig(self, key, value, exist_ok=True)
+        except ValueError as e:
+            if "already used" in str(e):
+                return
+            raise
+
+    register._idem = True
+    cls.register = register
+
+
 @dataclass
 class HookStore:
     outputs: dict = field(default_factory=dict)
@@ -213,7 +240,7 @@ def _hook_all(model, store: "HookStore", name_map: list[tuple[str, str]] | None)
 def build_inputs(model_id: str, image_url: str, prompt: str, device: str):
     from transformers import AutoProcessor
 
-    processor = AutoProcessor.from_pretrained(model_id)  # in-library Molmo2Processor
+    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=False)  # in-library
     image = load_image(image_url)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": prompt}, {"type": "image", "image": image},
@@ -270,6 +297,7 @@ def cmd_parity(args) -> int:
     )
 
     torch_dtype = getattr(torch, args.dtype)
+    _make_registration_idempotent()  # allow the remote original to import alongside the in-library port
     processor, _, inputs = build_inputs(args.model_id, args.image, args.prompt, args.device)
 
     # ---- Phase 1: ORIGINAL (remote code) -- keep its weights on CPU for the port, then free GPU.
@@ -286,7 +314,7 @@ def cmd_parity(args) -> int:
 
     # ---- Phase 2: PORT (in-library) -- same weights, remapped names; original is gone from GPU.
     print("[phase 2] in-library port from remapped weights")
-    config = Molmo2Config.from_pretrained(args.model_id)
+    config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     port = Molmo2ForConditionalGeneration.from_pretrained(
         args.model_id,
@@ -429,7 +457,8 @@ def cmd_demo(args) -> int:
     from transformers import AutoProcessor, Molmo2Config, Molmo2ForConditionalGeneration
 
     torch_dtype = getattr(torch, args.dtype)
-    config = Molmo2Config.from_pretrained(args.model_id)
+    _make_registration_idempotent()
+    config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
     config._attn_implementation = args.attn
     # Load original weights remapped into the port so the demo exercises the port end-to-end.
     from transformers import AutoModelForImageTextToText
@@ -443,7 +472,7 @@ def cmd_demo(args) -> int:
         state_dict=convert_state_dict(original.state_dict()),
     ).eval()
     del original
-    processor = AutoProcessor.from_pretrained(args.model_id)  # in-library Molmo2Processor
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=False)  # in-library
 
     # --- image grounding ---
     image = load_image(args.image)
@@ -477,10 +506,11 @@ def cmd_reference(args) -> int:
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     torch_dtype = getattr(torch, args.dtype)
+    _make_registration_idempotent()
     model = AutoModelForImageTextToText.from_pretrained(
         args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
     ).to(args.device).eval()
-    processor = AutoProcessor.from_pretrained(args.model_id)  # in-library Molmo2Processor
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=False)  # in-library
     image = load_image(args.image)
     messages = [{"role": "user", "content": [
         {"type": "text", "text": args.prompt}, {"type": "image", "image": image},
