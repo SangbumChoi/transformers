@@ -1010,8 +1010,14 @@ def cmd_upload(args) -> int:
     config.torch_dtype = args.dtype
     config.save_pretrained(out_dir)
 
-    # Port processor (tokenizer + image/video processor + chat template).
-    load_processor(args.model_id).save_pretrained(out_dir)
+    # Port processor (tokenizer + image/video processor + chat template). Also save the sub
+    # processors explicitly so standalone preprocessor_config.json / video_preprocessor_config.json
+    # exist (AutoImageProcessor needs them; the combined processor_config.json is not enough).
+    processor = load_processor(args.model_id)
+    processor.save_pretrained(out_dir)
+    processor.image_processor.save_pretrained(out_dir)
+    if getattr(processor, "video_processor", None) is not None:
+        processor.video_processor.save_pretrained(out_dir)
 
     # Strip every `auto_map` (inherited from the original's remote-code repo) from all JSON configs,
     # so the repo loads via the in-library classes with NO trust_remote_code.
