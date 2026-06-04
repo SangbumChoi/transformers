@@ -301,7 +301,108 @@ caption("Figure 3. Cosmos 3 is no longer just a video predictor. A reasoning tra
 
 story.append(PageBreak())
 
-# ================================================================ PAGE 4 — data & diversity
+# ================================================================ PAGE — why two pipelines
+p("Deep-dive: why did Cosmos 1 have TWO engines?", H2)
+p("This is the most confusing part of Cosmos 1, so it deserves a clear answer. The two engines were "
+  "<b>not</b> a duplicate or a mistake &mdash; the paper states it built them on purpose: "
+  "<i>“We explore two scalable approaches for building pre-trained world foundation models &mdash; "
+  "the diffusion model and the autoregressive model.”</i> Both solve the <b>same</b> hard problem "
+  "(predict believable future video) with the same trick &mdash; break one hard generation into many "
+  "easy sub-steps &mdash; but in two different “spaces”, which forces two different training recipes.",
+  BODY)
+story.append(Paragraph(
+    "Analogy: same destination, two routes. Diffusion is a <b>sculptor</b> &mdash; start from a "
+    "rough noisy block and refine the whole video over many passes. Autoregressive is a "
+    "<b>writer</b> &mdash; produce the video one “token” at a time, left to right, like an LLM.",
+    ANALOGY))
+
+twop = [
+    ["Aspect", "Diffusion engine (sculptor)", "Autoregressive engine (writer)"],
+    ["Token space", "Continuous latents (CV 8×8×8 tokenizer)", "Discrete codes (DV 8×16×16; 64,000-word visual vocabulary)"],
+    ["Learning signal", "Denoising score-matching (EDM): recover the clean signal from a noised one", "Next-token cross-entropy: predict the next code (exactly like an LLM)"],
+    ["Text conditioning", "T5-XXL via cross-attention", "T5 via cross-attention added to blocks"],
+    ["Training stages", "Text2World pretrain → Video2World fine-tune (add observed frames)", "Video-only next-token pretrain → add text for Video2World"],
+    ["Model sizes", "7B / 14B", "4B / 12B (5B / 13B for Video2World)"],
+    ["Strength", "Highest visual fidelity", "Speed + streaming; plugs into the LLM toolbox (KV-cache, real-time)"],
+    ["Weakness", "Many denoising steps → slower", "Heavy compression → artifacts → needs a diffusion decoder to repaint detail"],
+]
+tp = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(twop)]
+tpt = Table(tp, colWidths=[3.0*cm, 7.0*cm, 7.0*cm], repeatRows=1)
+tpstyle = [
+    ("BACKGROUND", (0,0), (0,0), DARK),
+    ("BACKGROUND", (1,0), (1,0), G1), ("BACKGROUND", (2,0), (2,0), G4),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#EEEEEE")),
+]
+for i in range(1, len(tp)):
+    if i % 2 == 0: tpstyle.append(("BACKGROUND", (1,i), (-1,i), ROW_ALT))
+tpt.setStyle(TableStyle(tpstyle))
+story.append(tpt)
+caption("Table 2a. The two engines use different tokenizers, different losses, and different "
+        "training stages — they are genuinely different models, not one model trained twice.")
+
+p("So why keep both?", H3)
+p("They are <b>complementary bets</b>. Diffusion is the <b>quality</b> champion; autoregressive is "
+  "the <b>speed + LLM-integration</b> champion (it treats video like language &mdash; exactly the "
+  "direction Cosmos 3 later embraced). The <b>diffusion decoder</b> exists only because the "
+  "autoregressive path's aggressive discrete compression <i>“can sometimes lead to undesired "
+  "distortions”</i> &mdash; so a small diffusion model cleans its output back up.", BODY)
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — why each generation
+p("Why each new generation? (the problem it solved)", H2)
+p("A fair question: was each new version just a <b>bigger model on more data</b>? <b>No.</b> Scale "
+  "grew every time, but it was the <i>enabler</i>, not the headline &mdash; each step introduced a "
+  "distinct architectural or algorithmic idea to fix a concrete problem.", BODY)
+
+prob = [
+    ["Step", "Key problem with the previous version", "How they solved it", "Real novelty (beyond size/data)"],
+    ["1 → 2",
+     "Too slow, too many separate engines, visible hallucinations — a research platform, not a daily tool.",
+     "Commit to the diffusion path; add sparse attention; engineer better quality/control; add small fast variants; add action-conditioned post-training.",
+     "Sparse attention (≈2.6× faster) + action conditioning."],
+    ["2 → 2.5",
+     "Three separate task-models to juggle; a T5 text encoder that doesn't “understand” physics; short, single-camera video.",
+     "Unify the 3 tasks into ONE flow-based model; replace T5 with the Cosmos-Reason1 VLM as encoder; add RL post-training + model merging; extend to 30s, multi-camera.",
+     "Task unification + flow matching + reasoning-VLM encoder + RL."],
+    ["2.5 → 3",
+     "Still only a video predictor — can't natively reason, hear, or act; understanding and generation were separate models.",
+     "One mixture-of-transformers omnimodel: a reasoning transformer + an expert generation transformer; reasons before it generates; adds audio + action.",
+     "New architecture (MoT) + new modalities (audio/action) + merging understand/generate/act."],
+]
+pr = []
+for i, r in enumerate(prob):
+    if i == 0:
+        pr.append([cellP(c, header=True) for c in r])
+    else:
+        pr.append([cellP(r[0], label=True), cellP(r[1]), cellP(r[2]), cellP(r[3])])
+prt = Table(pr, colWidths=[1.6*cm, 5.0*cm, 5.4*cm, 5.0*cm], repeatRows=1)
+prstyle = [
+    ("BACKGROUND", (0,0), (-1,0), NV_GREEN),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+    ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), LIGHT_BG),
+    ("BACKGROUND", (1,2), (-1,2), ROW_ALT),
+]
+prt.setStyle(TableStyle(prstyle))
+story.append(prt)
+caption("Table 2b. Read the rightmost column: every jump is a genuine idea, not a scale-up. "
+        "1→2 buys speed; 2→2.5 buys understanding + simplicity; 2.5→3 buys a whole new capability.")
+
+p("The one-sentence “why”", H3)
+bullets([
+    "<b>1→2:</b> “Make it fast and reliable enough to actually use.”",
+    "<b>2→2.5:</b> “Make it one model that truly understands the request.”",
+    "<b>2.5→3:</b> “Stop just watching the world — reason about it, hear it, and act in it.”",
+])
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — data & diversity
 p("The data: scale and diversity", H2)
 p("A WFM is only as good as the video it learns from. Cosmos 1 curated <b>~100 million clips</b> "
   "out of <b>20 million hours</b> of raw video, deliberately balanced across nine kinds of physical "
@@ -340,6 +441,20 @@ caption("Table 2. The jump from “100M clips” to “20T tokens” reflects Co
         "<b>Caveat:</b> Cosmos 3's exact counts (20T tokens, ~1B images, ~400M videos) come from "
         "press coverage; NVIDIA's official release states only “billions of samples across text, "
         "image, video, sound and action.”")
+
+spacer(4)
+p("The key insight: each generation adds a new TYPE of data", H3)
+p("The data story is <b>qualitative</b>, not just “more”. Each generation introduces a new "
+  "<i>kind</i> of data, and that new kind is exactly what unlocks the next capability:", BODY)
+bullets([
+    "<b>Cosmos 1 — broad video</b> (9 balanced categories) → learns <b>general physics</b>.",
+    "<b>Cosmos 2 — + action-labelled robot data</b> (Bridge, AgiBotWorld, GR00T Dreams) → learns "
+    "<b>“this action causes that outcome.”</b>",
+    "<b>Cosmos 2.5 — + multi-camera / domain data</b> (7-cam driving, 3-cam robotics) → learns "
+    "<b>deployment realism and multi-view consistency.</b>",
+    "<b>Cosmos 3 — + audio and action trajectories</b> (from humans and robots) → enables the "
+    "<b>omnimodel</b> that can hear and act, not just see.",
+])
 
 story.append(PageBreak())
 
