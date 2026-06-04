@@ -468,12 +468,31 @@ def _capture_block_hidden(model, inputs):
                 vis[key] = t.detach().float().cpu()
         return h
 
+    text_probes = {
+        "L0.attn_norm": ".blocks.0.attn_norm",
+        "L0.q_norm": ".blocks.0.self_attn.q_norm",
+        "L0.k_norm": ".blocks.0.self_attn.k_norm",
+        "L0.attn_out": ".blocks.0.self_attn",
+        "L0.ff_norm": ".blocks.0.ff_norm",
+        "L0.mlp": ".blocks.0.mlp",
+    }
+
+    def cap_txt(key):
+        def h(_m, _i, o):
+            t = o[0] if isinstance(o, (tuple, list)) else o
+            if torch.is_tensor(t):
+                vis[key] = t.detach().float().cpu()
+        return h
+
     for name, module in model.named_modules():
         if name.endswith(".image_pooling_2d"):
             handles.append(module.register_forward_pre_hook(cap_pre("vit_to_pool"), with_kwargs=True))
             handles.append(module.register_forward_hook(cap_out("pooled")))
         elif name.endswith(".image_projector"):
             handles.append(module.register_forward_hook(cap_out("proj_out")))
+        for key, suffix in text_probes.items():
+            if name.endswith(suffix):
+                handles.append(module.register_forward_hook(cap_txt(key)))
 
     out = _forward_filtered(model, dict(inputs))
     for h in handles:
@@ -528,6 +547,25 @@ def cmd_parity_reference(args) -> int:
         mean_rel = d.mean().item() / (a.abs().mean().item() or 1.0)
         print(f"{label:>12s} {str(tuple(a.shape)):>22s} {d.max().item():>12.3e} "
               f"{d.mean().item():>12.3e} {mean_rel:>10.2e}")
+
+    # ---- Layer-0 text-decoder submodule split: the first probe that diverges (given bit-exact block
+    # input) is where the text-decoder discrepancy enters (q_norm/k_norm => qk_norm layout, etc.).
+    ref_txt = ref.get("text_probes") or {}
+    if ref_txt:
+        print("\n=== layer-0 text-decoder submodule diffs (original ref vs port) ===")
+        print(f"{'probe':>14s} {'shape':>22s} {'max_abs':>12s} {'mean_abs':>12s} {'mean_rel':>10s}")
+        for key in ["L0.attn_norm", "L0.q_norm", "L0.k_norm", "L0.attn_out", "L0.ff_norm", "L0.mlp"]:
+            a, b = ref_txt.get(key), port_vis.get(key)
+            if a is None or b is None:
+                print(f"{key:>14s} {'(missing)':>22s}")
+                continue
+            if tuple(a.shape) != tuple(b.shape):
+                print(f"{key:>14s} {f'ref{tuple(a.shape)} port{tuple(b.shape)}':>22s}  SHAPE MISMATCH")
+                continue
+            d = (a - b).abs()
+            mean_rel = d.mean().item() / (a.abs().mean().item() or 1.0)
+            print(f"{key:>14s} {str(tuple(a.shape)):>22s} {d.max().item():>12.3e} "
+                  f"{d.mean().item():>12.3e} {mean_rel:>10.2e}")
 
     # ---- Vision-path isolation: split inputs_embeds diff by image vs text positions.
     # Image positions merge in image features additively, so the text embedding cancels and the diff

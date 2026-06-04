@@ -124,6 +124,30 @@ def main() -> int:
         elif name.endswith(".image_projector"):
             handles.append(module.register_forward_hook(cap_out("proj_out")))
 
+    # Probe layer-0 text-decoder submodules to localize the text-decoder divergence. The original's
+    # attribute names match the port (self_attn / attn_norm / ff_norm / mlp / q_norm / k_norm).
+    txt: dict[str, torch.Tensor] = {}
+    TEXT_PROBES = {
+        "L0.attn_norm": ".blocks.0.attn_norm",
+        "L0.q_norm": ".blocks.0.self_attn.q_norm",
+        "L0.k_norm": ".blocks.0.self_attn.k_norm",
+        "L0.attn_out": ".blocks.0.self_attn",
+        "L0.ff_norm": ".blocks.0.ff_norm",
+        "L0.mlp": ".blocks.0.mlp",
+    }
+
+    def cap_txt(key):
+        def h(_m, _i, out):
+            t = out[0] if isinstance(out, (tuple, list)) else out
+            if torch.is_tensor(t):
+                txt[key] = t.detach().float().cpu()
+        return h
+
+    for name, module in model.named_modules():
+        for key, suffix in TEXT_PROBES.items():
+            if name.endswith(suffix):
+                handles.append(module.register_forward_hook(cap_txt(key)))
+
     with torch.no_grad():
         out = model(**inputs, use_cache=False)
     for h in handles:
@@ -147,6 +171,7 @@ def main() -> int:
         "vit_to_pool": vis.get("vit_to_pool"),
         "pooled": vis.get("pooled"),
         "proj_out": vis.get("proj_out"),
+        "text_probes": txt,
         "logits_last": logits[0, -1],
         "logits_argmax": logits[0].argmax(-1),
         "generated_ids": tokens[0],
