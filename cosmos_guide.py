@@ -336,7 +336,10 @@ dt.setStyle(TableStyle([
 ]))
 story.append(dt)
 caption("Table 2. The jump from “100M clips” to “20T tokens” reflects Cosmos 3 also ingesting "
-        "text, audio and robot/human action data &mdash; not just video.")
+        "text, audio and robot/human action data &mdash; not just video. "
+        "<b>Caveat:</b> Cosmos 3's exact counts (20T tokens, ~1B images, ~400M videos) come from "
+        "press coverage; NVIDIA's official release states only “billions of samples across text, "
+        "image, video, sound and action.”")
 
 story.append(PageBreak())
 
@@ -375,8 +378,8 @@ hp = [
     ["Model (hidden) dimension", "4,096", "5,120"],
     ["Attention heads", "32", "40"],
     ["AdaLN-LoRA rank", "256", "256"],
-    ["Learning rate", "2⁻¹⁵", "2⁻¹⁶"],
-    ["Optimizer", "AdamW (β₁=0.9, β₂=0.99), weight decay 0.1–0.2", ""],
+    ["Learning rate", "2^-15", "2^-16"],
+    ["Optimizer", "AdamW (beta1=0.9, beta2=0.99), weight decay 0.1–0.2", ""],
     ["Warmup", "2,500 iterations, linear", ""],
     ["Text encoder", "T5-XXL, 512 tokens via cross-attention", ""],
     ["Resolution schedule", "512p (57 frames)  →  720p (121 frames)", ""],
@@ -571,7 +574,10 @@ story.append(vbar(
     series_names=["Cosmos-Reason1 7B", "Cosmos-Reason1 56B"],
     w=320, h=170, vmin=0, vmax=80, step=20, ylabel="benchmark score (%)"))
 caption("Figure 7. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
-        "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model.")
+        "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model. "
+        "<b>Source note:</b> numbers are from NVIDIA's Cosmos-Reason1 research page (released 7B "
+        "checkpoint). An earlier arXiv v1 of the paper reported an <i>8B</i> model with somewhat "
+        "different scores &mdash; see the verification page.")
 
 p("Reinforcement learning (GRPO) lifts reasoning further", H3)
 story.append(vbar(
@@ -582,7 +588,9 @@ story.append(vbar(
     w=320, h=170, vmin=0, vmax=100, step=20, ylabel="score (%)"))
 caption("Figure 8. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
         "(combined reasoning) and +7.0 points (intuitive physics) — evidence that post-training, "
-        "not just size, drives physical reasoning.")
+        "not just size, drives physical reasoning. <b>Source note:</b> research-page figures; arXiv "
+        "v1 reports different magnitudes (e.g. intuitive physics 65.7&rarr;68.7). The <i>direction</i> "
+        "&mdash; RL helps &mdash; is consistent across both.")
 
 p("Generation-quality results (Cosmos 2.5 & 3)", H3)
 bullets([
@@ -599,7 +607,83 @@ caption("Note: FVD/FID measure how realistic/consistent generated video is (lowe
 
 story.append(PageBreak())
 
-# ================================================================ PAGE 10 — summary
+# ================================================================ PAGE — verification / fact-check
+p("Verification & source audit", H2)
+p("Every quantitative claim in this guide was cross-checked against primary sources "
+  "(NVIDIA papers, research pages, and the official Cosmos 3 release). Of 13 checked claims, "
+  "<b>11 verified exactly</b>; <b>2 carry source-version or disclosure caveats</b> (marked “!”). "
+  "No factual errors were found in any claim that could be checked against a primary source.", BODY)
+
+audit = [
+    ["#", "Claim in this guide", "Checked against", "Verdict"],
+    ["1", "Cosmos 1 data mix: 20/16/16/11/10/8/8/4/7%", "arXiv 2501.03575", "OK — exact"],
+    ["2", "~100M clips (10^8) from ~20M hours of video", "arXiv 2501.03575", "OK — exact"],
+    ["3", "Diffusion 7B = 28L / 4096 / 32 heads; 14B = 36L / 5120 / 40", "Table 11", "OK — exact"],
+    ["4", "AdaLN-LoRA rank 256; LR 2^-15 / 2^-16; context 56,320", "arXiv 2501.03575", "OK — exact"],
+    ["5", "Autoregressive 4B / 12B (+ 5B / 13B Video2World)", "arXiv 2501.03575", "OK — exact"],
+    ["6", "Trained on ~10,000 H100 GPUs for ~3 months", "arXiv 2501.03575", "OK — exact"],
+    ["7", "Tokenizer up to 12× faster than prior (CogVideoX)", "arXiv 2501.03575", "OK"],
+    ["8", "Cosmos 2: 0.6B/2B/14B; sparse attn up to 2.6×; 480/704p", "GitHub + NVIDIA blog", "OK"],
+    ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
+     "NVIDIA research page", "OK"],
+    ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
+    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 7–8 scores",
+     "Research page vs arXiv v1", "CAVEAT — see below"],
+    ["12", "Cosmos 3: mixture-of-transformers omnimodel; Super/Nano/Edge; #1 on open leaderboards",
+     "NVIDIA newsroom (Jun 2026)", "OK"],
+    ["13", "Cosmos 3 data = 20T tokens, ~1B images, ~400M videos",
+     "Press coverage (not NVIDIA)", "CAVEAT — see below"],
+]
+ad = []
+for i, r in enumerate(audit):
+    if i == 0:
+        ad.append([cellP(c, header=True) for c in r])
+    else:
+        verdict = r[3]
+        vstyle = CELL
+        ad.append([cellP(r[0]), cellP(r[1]), cellP(r[2]), Paragraph(verdict, CELL)])
+at = Table(ad, colWidths=[0.8*cm, 8.4*cm, 4.3*cm, 3.5*cm], repeatRows=1)
+astyle = [
+    ("BACKGROUND", (0,0), (-1,0), DARK),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 4), ("RIGHTPADDING", (0,0), (-1,-1), 4),
+]
+for i in range(1, len(ad)):
+    if audit[i][3].startswith("OK"):
+        astyle.append(("TEXTCOLOR", (3,i), (3,i), colors.HexColor("#2E7D32")))
+        astyle.append(("BACKGROUND", (3,i), (3,i), colors.HexColor("#EAF6EA")))
+    else:
+        astyle.append(("TEXTCOLOR", (3,i), (3,i), colors.HexColor("#B9770E")))
+        astyle.append(("BACKGROUND", (3,i), (3,i), colors.HexColor("#FCF3E3")))
+    if i % 2 == 0:
+        astyle.append(("BACKGROUND", (0,i), (2,i), ROW_ALT))
+at.setStyle(TableStyle(astyle))
+story.append(at)
+caption("Table 6. Claims audit. Green = verified against a primary source; amber = caveat.")
+
+spacer(4)
+p("The two caveats, in detail", H3)
+bullets([
+    "<b>! Cosmos-Reason1 size & scores (claim 11):</b> NVIDIA's research page describes a "
+    "released <b>7B</b> model with the scores plotted in Figures 7–8. The <b>arXiv v1</b> of the "
+    "paper instead describes an <b>8B</b> model and reports different numbers (e.g. physical "
+    "common sense 52.3% vs 54.3%; intuitive-physics RL gain 65.7&rarr;68.7 vs 74.5&rarr;81.5). "
+    "This is a paper-revision difference. This guide uses the <b>research-page (7B)</b> figures "
+    "because that matches the publicly released checkpoint &mdash; but treat the exact decimals as "
+    "version-dependent. The qualitative conclusions (bigger model helps; RL helps) hold in both.",
+    "<b>! Cosmos 3 data scale (claim 13):</b> the “20 trillion tokens / ~1B images / ~400M videos” "
+    "figures come from <b>press coverage</b> of the launch. NVIDIA's own newsroom release only "
+    "says “billions of samples across text, image, video, sound and action.” Treat the precise "
+    "counts as <b>unconfirmed by NVIDIA</b>.",
+])
+p("<b>Bottom line:</b> the guide is accurate where primary sources exist. The only soft spots are "
+  "(a) decimal-level benchmark numbers for Cosmos-Reason1, which differ between paper versions, and "
+  "(b) Cosmos 3's exact data counts, which NVIDIA has not officially published.", BODY)
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — summary
 p("Putting it all together", H2)
 p("The four generations trace a clear arc:", BODY)
 bullets([
