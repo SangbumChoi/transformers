@@ -567,6 +567,27 @@ def cmd_parity_reference(args) -> int:
             print(f"{key:>14s} {str(tuple(a.shape)):>22s} {d.max().item():>12.3e} "
                   f"{d.mean().item():>12.3e} {mean_rel:>10.2e}")
 
+        # Discriminate RoPE/position_ids (hits all positions) from the multimodal mask (concentrated
+        # in the bidirectional image region) using the attention output's per-position diff.
+        a, b = ref_txt.get("L0.attn_out"), port_vis.get("L0.attn_out")
+        if a is not None and b is not None and tuple(a.shape) == tuple(b.shape) and a.dim() == 3:
+            ids = inputs["input_ids"][0].cpu()
+            image_token_id = getattr(config, "image_token_id", None)
+            per_pos = (a[0] - b[0]).abs().amax(dim=-1)  # [seq]
+            print("\n  L0.attn_out per-position diff (RoPE vs mask discriminator):")
+            if image_token_id is not None:
+                img = ids == image_token_id
+                txt_m = ~img
+                if int(img.sum()):
+                    print(f"    image positions: max={per_pos[img].max().item():.3e} "
+                          f"mean={per_pos[img].mean().item():.3e}")
+                if int(txt_m.sum()):
+                    print(f"    text  positions: max={per_pos[txt_m].max().item():.3e} "
+                          f"mean={per_pos[txt_m].mean().item():.3e}")
+            half = per_pos.shape[0] // 2
+            print(f"    first-half mean={per_pos[:half].mean().item():.3e}  "
+                  f"second-half mean={per_pos[half:].mean().item():.3e} (growth-with-position => RoPE)")
+
     # ---- Vision-path isolation: split inputs_embeds diff by image vs text positions.
     # Image positions merge in image features additively, so the text embedding cancels and the diff
     # there == the image-feature diff; text positions should be ~0 (identical ids + embedding table).
