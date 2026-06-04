@@ -524,6 +524,12 @@ def cmd_parity_reference(args) -> int:
     print(f"[ref] loading reference: {args.reference}")
     ref = _load_reference(args.reference)
     inputs = {k: (v.to(args.device) if torch.is_tensor(v) else v) for k, v in ref["inputs"].items()}
+    # The original's processor emits `token_type_ids`; the port's forward expects `mm_token_type_ids`
+    # (same tensor, renamed). Without this alias the port silently builds a plain-causal mask while
+    # the original used image<->image bidirectional attention -> spurious text-decoder divergence.
+    if "token_type_ids" in inputs and "mm_token_type_ids" not in inputs:
+        inputs["mm_token_type_ids"] = inputs["token_type_ids"]
+        print("[harness] aliased token_type_ids -> mm_token_type_ids for the port")
     print(f"[ref] original dtype={ref.get('dtype')} attn={ref.get('attn')} prompt={ref.get('prompt')!r} "
           f"layers={ref['block_hidden'].shape[0]} seq={ref['block_hidden'].shape[1]}")
 
