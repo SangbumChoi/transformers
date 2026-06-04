@@ -99,6 +99,31 @@ def main() -> int:
                         inputs_embeds_holder["x"] = t.detach().float().cpu()
                 handles.append(module.register_forward_pre_hook(pre_hook, with_kwargs=True))
 
+    # Split the vision pipeline: ViT features (to_pool, pre-pooling) -> pooled -> projected (final).
+    # The attribute names (image_pooling_2d / image_projector) are shared with the port.
+    vis: dict[str, torch.Tensor] = {}
+
+    def cap_pre(key):
+        def h(_m, args, kwargs):
+            t = args[1] if len(args) > 1 else kwargs.get("keys", kwargs.get("to_pool"))
+            if torch.is_tensor(t):
+                vis[key] = t.detach().float().cpu()
+        return h
+
+    def cap_out(key):
+        def h(_m, _i, out):
+            t = out[0] if isinstance(out, (tuple, list)) else out
+            if torch.is_tensor(t):
+                vis[key] = t.detach().float().cpu()
+        return h
+
+    for name, module in model.named_modules():
+        if name.endswith(".image_pooling_2d"):
+            handles.append(module.register_forward_pre_hook(cap_pre("vit_to_pool"), with_kwargs=True))
+            handles.append(module.register_forward_hook(cap_out("pooled")))
+        elif name.endswith(".image_projector"):
+            handles.append(module.register_forward_hook(cap_out("proj_out")))
+
     with torch.no_grad():
         out = model(**inputs, use_cache=False)
     for h in handles:
@@ -119,6 +144,9 @@ def main() -> int:
         "inputs": {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in inputs.items()},
         "block_hidden": block_hidden,
         "inputs_embeds": (inputs_embeds_holder["x"][0] if "x" in inputs_embeds_holder else None),
+        "vit_to_pool": vis.get("vit_to_pool"),
+        "pooled": vis.get("pooled"),
+        "proj_out": vis.get("proj_out"),
         "logits_last": logits[0, -1],
         "logits_argmax": logits[0].argmax(-1),
         "generated_ids": tokens[0],

@@ -450,13 +450,38 @@ def _capture_block_hidden(model, inputs):
                     if torch.is_tensor(t):
                         embeds["x"] = t.detach().float().cpu()
                 handles.append(module.register_forward_pre_hook(pre_hook, with_kwargs=True))
+
+    # Vision-pipeline stages, mirroring the reference dump (to_pool -> pooled -> projected).
+    vis: dict[str, "torch.Tensor"] = {}
+
+    def cap_pre(key):
+        def h(_m, args, kwargs):
+            t = args[1] if len(args) > 1 else kwargs.get("keys", kwargs.get("to_pool"))
+            if torch.is_tensor(t):
+                vis[key] = t.detach().float().cpu()
+        return h
+
+    def cap_out(key):
+        def h(_m, _i, o):
+            t = o[0] if isinstance(o, (tuple, list)) else o
+            if torch.is_tensor(t):
+                vis[key] = t.detach().float().cpu()
+        return h
+
+    for name, module in model.named_modules():
+        if name.endswith(".image_pooling_2d"):
+            handles.append(module.register_forward_pre_hook(cap_pre("vit_to_pool"), with_kwargs=True))
+            handles.append(module.register_forward_hook(cap_out("pooled")))
+        elif name.endswith(".image_projector"):
+            handles.append(module.register_forward_hook(cap_out("proj_out")))
+
     out = _forward_filtered(model, dict(inputs))
     for h in handles:
         h.remove()
     num_layers = max(blocks) + 1
     block_hidden = torch.stack([blocks[i][0] for i in range(num_layers)])
     inputs_embeds = embeds["x"][0] if "x" in embeds else None
-    return block_hidden, out.logits.float().cpu(), inputs_embeds
+    return block_hidden, out.logits.float().cpu(), inputs_embeds, vis
 
 
 def cmd_parity_reference(args) -> int:
@@ -483,9 +508,26 @@ def cmd_parity_reference(args) -> int:
         local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
     ).eval()
 
-    port_hidden, port_logits, port_embeds = _capture_block_hidden(port, inputs)
+    port_hidden, port_logits, port_embeds, port_vis = _capture_block_hidden(port, inputs)
     ref_hidden = ref["block_hidden"]
     n_layers = min(ref_hidden.shape[0], port_hidden.shape[0])
+
+    # ---- Vision-pipeline stage split: ViT features -> pooled -> projected. Pinpoints which stage
+    # first introduces the image-feature divergence (pixel_values are identical across both runs).
+    print("\n=== vision pipeline stage diffs (original ref vs port) ===")
+    print(f"{'stage':>12s} {'shape':>22s} {'max_abs':>12s} {'mean_abs':>12s} {'mean_rel':>10s}")
+    for key, label in [("vit_to_pool", "ViT->pool in"), ("pooled", "pooled"), ("proj_out", "projected")]:
+        a, b = ref.get(key), port_vis.get(key)
+        if a is None or b is None:
+            print(f"{label:>12s} {'(missing)':>22s}")
+            continue
+        if tuple(a.shape) != tuple(b.shape):
+            print(f"{label:>12s} {f'ref{tuple(a.shape)} port{tuple(b.shape)}':>22s}  SHAPE MISMATCH")
+            continue
+        d = (a - b).abs()
+        mean_rel = d.mean().item() / (a.abs().mean().item() or 1.0)
+        print(f"{label:>12s} {str(tuple(a.shape)):>22s} {d.max().item():>12.3e} "
+              f"{d.mean().item():>12.3e} {mean_rel:>10.2e}")
 
     # ---- Vision-path isolation: split inputs_embeds diff by image vs text positions.
     # Image positions merge in image features additively, so the text embedding cancels and the diff
