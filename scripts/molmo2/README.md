@@ -1,63 +1,80 @@
 # Molmo2 port verification & demo
 
-`verify_molmo2.py` checks that the in-library **Molmo2** port reproduces the original
-`allenai/Molmo2-8B` checkpoint, and runs a grounding demo with point overlays.
+Tools to check that the in-library **Molmo2** port reproduces the original `allenai/Molmo2-8B`
+checkpoint, plus a grounding demo with point overlays.
 
-The original checkpoint ships as *remote code* with the **pre-refactor** parameter names
-(`model.transformer.blocks`, `image_vit.transformer.resblocks`, `attention.wq`,
-`image_projector.w1` …). The port refactors them (`model.language_model.blocks`,
-`image_vit.encoder.layers`, `self_attn.q_proj`, `image_projector.gate_proj` …). The script
-loads the **same weights** into both implementations (remapping the original state dict onto the
-port) so any output difference is purely an implementation difference, not a weight mismatch.
+- `verify_molmo2.py` — runs the **port** (from this branch): grounding demo, and `parity` that
+  compares the port against a saved reference of the original.
+- `reference_molmo2.py` — runs the **original** under a pinned, compatible transformers and dumps a
+  reference (per-layer hidden states, vision-stage tensors, RoPE cos/sin, logits, generated tokens,
+  and the exact input tensors), uploading it to a HF dataset repo.
+
+## Why two scripts (cross-version comparison)
+
+The original ships as *remote code* written for an older transformers release (`transformers
+4.57.1`). It does **not** import/run under this branch (renamed internals: `ROPE_INIT_FUNCTIONS`,
+`create_causal_mask` kwargs, …). So we capture the original's ground-truth in its native version
+(`reference_molmo2.py`, pinned via PEP 723) and compare the port against it on this branch. The
+reference stores the **exact input tensors**, so the comparison isolates the model, not preprocessing.
+
+## Workflow (Hugging Face Jobs; the model is 8B, needs a GPU)
+
+```bash
+# 1) Dump the original's reference (pinned transformers==4.57.1) and upload to a dataset repo.
+hf jobs uv run --flavor l40sx1 --secrets HF_TOKEN \
+    scripts/molmo2/reference_molmo2.py \
+    -- --dtype float32 --attn sdpa --repo <your-username>/molmo2-parity-ref
+
+# 2) Compare the port (this branch) against that reference, with identical inputs.
+hf jobs uv run --flavor l40sx1 --secrets HF_TOKEN \
+    scripts/molmo2/verify_molmo2.py \
+    -- parity --reference <your-username>/molmo2-parity-ref --dtype float32 --attn sdpa
+
+# Grounding demo with overlay
+hf jobs uv run --flavor l4x1 --secrets HF_TOKEN \
+    scripts/molmo2/verify_molmo2.py -- demo --prompt "Point to the cat."
+```
+
+`-d`/`--detach` backgrounds a job; follow it with `hf jobs logs <job-id>`. `float32 + sdpa` is the
+canonical path and gives a bit-exact comparison. Use `bfloat16` if memory-constrained (looser, and
+note bf16 amplifies the model's massive-activation channels on a few dims).
+
+## What `parity --reference` reports
+
+Given identical inputs it loads the port, feeds the saved tensors, and prints:
+
+- per-text-layer hidden-state diffs (max = outlier channels, mean = bulk),
+- **vision pipeline stage split** (`ViT→pool` input → `pooled` → projected) to localize vision diffs,
+- **layer-0 text-decoder submodule split** (`attn_norm` / `q_norm` / `k_norm` / `self_attn` /
+  `ff_norm` / `mlp`) and a RoPE cos/sin check to localize text diffs,
+- `inputs_embeds` diff split by image vs text token positions,
+- final logits diff, next-token argmax, and greedy-token agreement; saves `molmo2_parity.png`.
 
 ## Subcommands
 
-| command     | what it does                                                                                  |
-|-------------|-----------------------------------------------------------------------------------------------|
-| `selftest`  | string-only check that the rename map covers all 706 params (no torch, no weights, no GPU)    |
-| `parity`    | identical inputs → both models; per-module max-abs diffs + logits diff + greedy-token match; saves `molmo2_parity.png` |
-| `demo`      | runs the port, parses `<point .../>` grounding output, saves overlay PNG                       |
-| `reference` | dumps the original model's logits/generation to JSON (cross-version fallback)                 |
-
-## Quick local check (no model download)
+| command     | what it does                                                                                       |
+|-------------|----------------------------------------------------------------------------------------------------|
+| `selftest`  | string-only check that the rename map covers all params (no torch, no weights, no GPU)              |
+| `parity`    | `--reference <repo|path>`: compare the port against a saved original reference; stage/submodule splits + plot |
+| `demo`      | runs the port, parses `<point .../>` grounding output, saves an overlay PNG                         |
 
 ```bash
-python scripts/molmo2/verify_molmo2.py selftest
+python scripts/molmo2/verify_molmo2.py selftest   # quick, no download
 ```
 
-## Full parity / demo on Hugging Face Jobs
+## Note on inputs: `mm_token_type_ids`
 
-The model is 8B, so run on a GPU. The script is a self-contained
-[uv script](https://docs.astral.sh/uv/guides/scripts/) (PEP 723) that installs `transformers`
-from this branch automatically:
+The original's processor emits `token_type_ids`; the port's forward expects **`mm_token_type_ids`**
+(same tensor, renamed). `parity --reference` aliases it automatically. If you build inputs yourself,
+pass `mm_token_type_ids` — otherwise the port silently builds a plain-causal mask instead of the
+image↔image bidirectional mask, which looks like a large text-decoder divergence but is an input bug.
 
-```bash
-# parity: layer-by-layer + logits diff (float32 + eager = exact comparison)
-hf jobs uv run --flavor a100-large --secrets HF_TOKEN \
-    https://raw.githubusercontent.com/SangbumChoi/transformers/molmo2/scripts/molmo2/verify_molmo2.py \
-    -- parity --max-new-tokens 20
+## Findings (this branch)
 
-# grounding demo with overlay
-hf jobs uv run --flavor a100-large --secrets HF_TOKEN \
-    https://raw.githubusercontent.com/SangbumChoi/transformers/molmo2/scripts/molmo2/verify_molmo2.py \
-    -- demo --prompt "Point to the cat."
-```
-
-Add `--detach` to background a job and follow it with `hf jobs logs <job-id>`. Artifacts
-(`molmo2_parity.png`, `molmo2_image_points.png`) are written under `--out-dir` (default
-`molmo2_out/`); on Jobs, push them somewhere persistent or print/inspect via logs.
-
-> **Note on the original's remote code.** `parity` imports the original via
-> `trust_remote_code=True`. That code was written against an older transformers release; if it
-> fails to import under this branch, use `reference` (pinned to a compatible transformers in its
-> own job) to dump the original outputs, then compare the port against that JSON.
-
-## Local GPU run
-
-```bash
-pip install -e .            # this branch
-python scripts/molmo2/verify_molmo2.py parity --device cuda --dtype float32 --attn eager
-```
-
-`float32` + `eager` gives the tightest comparison (~1e-4 logits diff expected). Use
-`--dtype bfloat16` if memory-constrained (looser tolerance).
+- In **float32 + SDPA** with inputs fed correctly, the port reproduces the original **bit-exactly**
+  across the whole model: vision backbone, pooling, projection, all text-decoder layers, and final
+  logits all show `0.000` difference; greedy generation matches.
+- The only model-side nit: the pooling attention's **eager** path adds a boolean mask to the logits
+  instead of excluding invalid patches with `-inf`, so eager differs from SDPA for partial pooling
+  groups at image edges. SDPA (the default) is correct, and the original has the same eager/SDPA
+  inconsistency, so this is low priority.
