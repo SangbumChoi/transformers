@@ -148,6 +148,16 @@ def main() -> int:
             if name.endswith(suffix):
                 handles.append(module.register_forward_hook(cap_txt(key)))
 
+    # Capture the RoPE cos/sin actually produced (layer-0 uses the "default" rope).
+    def cap_rope(_m, _i, out):
+        if isinstance(out, (tuple, list)) and len(out) >= 2:
+            txt["rope_cos"] = out[0].detach().float().cpu()
+            txt["rope_sin"] = out[1].detach().float().cpu()
+
+    for name, module in model.named_modules():
+        if name.endswith("rotary_embs.default") or name.endswith(".rotary_emb"):
+            handles.append(module.register_forward_hook(cap_rope))
+
     with torch.no_grad():
         out = model(**inputs, use_cache=False)
     for h in handles:
@@ -171,7 +181,9 @@ def main() -> int:
         "vit_to_pool": vis.get("vit_to_pool"),
         "pooled": vis.get("pooled"),
         "proj_out": vis.get("proj_out"),
-        "text_probes": txt,
+        "text_probes": {k: v for k, v in txt.items() if not k.startswith("rope_")},
+        "rope_cos": txt.get("rope_cos"),
+        "rope_sin": txt.get("rope_sin"),
         "logits_last": logits[0, -1],
         "logits_argmax": logits[0].argmax(-1),
         "generated_ids": tokens[0],

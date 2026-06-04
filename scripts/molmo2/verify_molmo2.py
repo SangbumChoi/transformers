@@ -494,6 +494,15 @@ def _capture_block_hidden(model, inputs):
             if name.endswith(suffix):
                 handles.append(module.register_forward_hook(cap_txt(key)))
 
+    def cap_rope(_m, _i, o):
+        if isinstance(o, (tuple, list)) and len(o) >= 2:
+            vis["rope_cos"] = o[0].detach().float().cpu()
+            vis["rope_sin"] = o[1].detach().float().cpu()
+
+    for name, module in model.named_modules():
+        if name.endswith("rotary_embs.default") or name.endswith(".rotary_emb"):
+            handles.append(module.register_forward_hook(cap_rope))
+
     out = _forward_filtered(model, dict(inputs))
     for h in handles:
         h.remove()
@@ -547,6 +556,26 @@ def cmd_parity_reference(args) -> int:
         mean_rel = d.mean().item() / (a.abs().mean().item() or 1.0)
         print(f"{label:>12s} {str(tuple(a.shape)):>22s} {d.max().item():>12.3e} "
               f"{d.mean().item():>12.3e} {mean_rel:>10.2e}")
+
+    # ---- RoPE cos/sin check: with Q/K/V bit-exact, a cos/sin mismatch is the attention divergence.
+    rc, rs = ref.get("rope_cos"), ref.get("rope_sin")
+    pc, ps = port_vis.get("rope_cos"), port_vis.get("rope_sin")
+    if rc is not None and pc is not None:
+        print("\n=== RoPE cos/sin (default rope) original ref vs port ===")
+        if tuple(rc.shape) != tuple(pc.shape):
+            print(f"  SHAPE MISMATCH: ref cos {tuple(rc.shape)} vs port {tuple(pc.shape)}")
+        else:
+            dc = (rc - pc).abs()
+            ds = (rs - ps).abs()
+            print(f"  cos: shape={tuple(rc.shape)} max_abs={dc.max().item():.3e} mean_abs={dc.mean().item():.3e}")
+            print(f"  sin: shape={tuple(rs.shape)} max_abs={ds.max().item():.3e} mean_abs={ds.mean().item():.3e}")
+            # ratio at a mid-position channel reveals a constant scale (attention_scaling) difference
+            flat_r = rc.flatten().abs(); flat_p = pc.flatten().abs()
+            nz = flat_r > 1e-3
+            if nz.any():
+                ratio = (flat_p[nz] / flat_r[nz])
+                print(f"  port/ref cos ratio: mean={ratio.mean().item():.4f} "
+                      f"min={ratio.min().item():.4f} max={ratio.max().item():.4f}")
 
     # ---- Layer-0 text-decoder submodule split: the first probe that diverges (given bit-exact block
     # input) is where the text-decoder discrepancy enters (q_norm/k_norm => qk_norm layout, etc.).
