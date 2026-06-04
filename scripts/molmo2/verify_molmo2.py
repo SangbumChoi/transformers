@@ -991,6 +991,79 @@ def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
+def cmd_upload(args) -> int:
+    """Convert the original checkpoint to the in-library Molmo2 layout and push it to the Hub.
+
+    Memory-safe: the conversion streams shards (no full model in RAM) and we upload the folder
+    directly, adding the canonical port config, the port processor, the original generation config,
+    and a model card that credits the original."""
+    import json
+    import os
+
+    from huggingface_hub import HfApi, hf_hub_download
+    from transformers import Molmo2Config
+
+    out_dir = convert_to_local_checkpoint(args.model_id, "/tmp/molmo2_port_upload", args.dtype)
+
+    # Canonical port config (overwrites the original config.json copied during conversion).
+    config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
+    config.torch_dtype = args.dtype
+    config.save_pretrained(out_dir)
+
+    # Port processor (tokenizer + image/video processor + chat template).
+    load_processor(args.model_id).save_pretrained(out_dir)
+
+    # Carry over the original generation config if present.
+    try:
+        gen = hf_hub_download(args.model_id, "generation_config.json")
+        import shutil
+
+        shutil.copy(gen, os.path.join(out_dir, "generation_config.json"))
+    except Exception as e:
+        print(f"[warn] no generation_config.json carried over ({e})")
+
+    card = f"""---
+license: apache-2.0
+base_model: {args.model_id}
+pipeline_tag: image-text-to-text
+library_name: transformers
+tags:
+- molmo2
+- multimodal
+- pointing
+---
+
+# Molmo2-8B (transformers format)
+
+This is [`{args.model_id}`]({"https://huggingface.co/" + args.model_id}) converted to the
+in-library 🤗 Transformers `Molmo2` implementation (no `trust_remote_code` needed). Weights are the
+original ones, only renamed to the in-library parameter layout (`dtype={args.dtype}`).
+
+Verified bit-exact against the original in float32 + SDPA across the full model (vision backbone,
+pooling, projection, all text-decoder layers, and final logits).
+
+```python
+from transformers import AutoModelForImageTextToText, AutoProcessor
+
+model = AutoModelForImageTextToText.from_pretrained("{args.repo}", dtype="auto", device_map="auto")
+processor = AutoProcessor.from_pretrained("{args.repo}")
+```
+
+All credit for the model goes to the original authors (Ai2). See the base model card for license,
+training details, and intended use.
+"""
+    with open(os.path.join(out_dir, "README.md"), "w") as f:
+        f.write(card)
+
+    api = HfApi()
+    api.create_repo(args.repo, repo_type="model", private=args.private, exist_ok=True)
+    api.upload_folder(folder_path=out_dir, repo_id=args.repo, repo_type="model",
+                      commit_message=f"Add Molmo2-8B converted from {args.model_id} (transformers format)")
+    vis = "private" if args.private else "public"
+    print(f"[uploaded] https://huggingface.co/{args.repo} ({vis})")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1022,6 +1095,12 @@ def main() -> int:
     sp = sub.add_parser("reference", help="dump original outputs for cross-version compare")
     common(sp)
 
+    sp = sub.add_parser("upload", help="convert original -> in-library layout and push to the Hub")
+    sp.add_argument("--model-id", default=MODEL_ID)
+    sp.add_argument("--dtype", default="bfloat16", choices=["float32", "bfloat16", "float16"])
+    sp.add_argument("--repo", required=True, help="target model repo id, e.g. user/Molmo2-8B-hf")
+    sp.add_argument("--private", action="store_true", help="create the repo as private")
+
     args = p.parse_args()
     if args.cmd == "selftest":
         return selftest(args.model_id)
@@ -1031,6 +1110,8 @@ def main() -> int:
         return cmd_demo(args)
     if args.cmd == "reference":
         return cmd_reference(args)
+    if args.cmd == "upload":
+        return cmd_upload(args)
     return 2
 
 
