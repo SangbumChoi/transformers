@@ -1013,6 +1013,30 @@ def cmd_upload(args) -> int:
     # Port processor (tokenizer + image/video processor + chat template).
     load_processor(args.model_id).save_pretrained(out_dir)
 
+    # Strip every `auto_map` (inherited from the original's remote-code repo) from all JSON configs,
+    # so the repo loads via the in-library classes with NO trust_remote_code.
+    def strip_auto_map(obj):
+        if isinstance(obj, dict):
+            obj.pop("auto_map", None)
+            for v in obj.values():
+                strip_auto_map(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                strip_auto_map(v)
+
+    for fn in os.listdir(out_dir):
+        if fn.endswith(".json"):
+            path = os.path.join(out_dir, fn)
+            try:
+                data = json.load(open(path))
+            except Exception:
+                continue
+            before = json.dumps(data)
+            strip_auto_map(data)
+            if json.dumps(data) != before:
+                json.dump(data, open(path, "w"), indent=2)
+                print(f"[upload] stripped auto_map from {fn}")
+
     # Carry over the original generation config if present.
     try:
         gen = hf_hub_download(args.model_id, "generation_config.json")
