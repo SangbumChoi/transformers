@@ -1057,11 +1057,16 @@ def cmd_video_parity(args) -> int:
     print(f"[inputs] input_ids={tuple(inputs['input_ids'].shape)} "
           f"pixel_values_videos={tuple(inputs['pixel_values_videos'].shape)}")
 
-    def run(model, tag):
-        # The port processor emits port-specific keys (e.g. ``mm_token_type_ids``) the original
-        # remote model does not consume; auto-drop any kwarg a model reports as unused and retry, so
-        # each model sees exactly the inputs it accepts on the *same* underlying tensors.
+    def run(model, tag, rename=None):
+        # The in-library processor emits ``mm_token_type_ids``; the original remote model wants the
+        # same tensor under its native name ``token_type_ids`` (dropping it leaves its multimodal
+        # merge indexing a None). Apply the per-model rename first, then auto-drop any *other* kwarg a
+        # model reports as unused and retry — so each model runs the identical tensors it accepts.
         mk = dict(inputs)
+        for src, dst in (rename or {}).items():
+            if src in mk:
+                mk[dst] = mk.pop(src)
+                print(f"[{tag}] renamed {src} -> {dst}")
         for _ in range(5):
             try:
                 with torch.no_grad():
@@ -1089,7 +1094,7 @@ def cmd_video_parity(args) -> int:
     original = AutoModelForImageTextToText.from_pretrained(
         args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
     ).to(args.device).eval()
-    o_logits, o_tok, o_text = run(original, "original")
+    o_logits, o_tok, o_text = run(original, "original", rename={"mm_token_type_ids": "token_type_ids"})
     del original
     _free()
 
