@@ -792,6 +792,82 @@ story.append(Paragraph(
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — how Cosmos 3 fuses modalities
+p("Deep-dive: how Cosmos 3 fuses 5 modalities (incl. audio)", H2)
+p("Cosmos 3 must ingest AND produce <b>five</b> very different data types &mdash; text, image, video, "
+  "<b>audio</b>, <b>action</b> &mdash; and reason about them together (text is symbols, video is "
+  "pixels, audio is a waveform, action is control vectors). How do you put all of that into "
+  "<b>one</b> model? Three ingredients:", BODY)
+
+# --- diagram: fusion pipeline + two towers
+fd = Drawing(482, 150)
+box(fd, 0, 42, 80, 64, ["INPUTS", "Text · Image", "Video · Audio", "Action"], colors.white, fs=7)
+arrow(fd, 80, 74, 96, 74)
+box(fd, 96, 42, 90, 64, ["Per-modality", "encoders", "(ViT · VAE ·", "action vectors)", "→ shared space"], LIGHT_BG, stroke=G4, fs=6.5)
+arrow(fd, 186, 74, 202, 74)
+fd.add(Rect(202, 16, 164, 116, fillColor=ORNG_BG, strokeColor=G4, strokeWidth=1.0, rx=5, ry=5))
+label(fd, 284, 122, "Mixture-of-Transformers", 7, DARK, bold=True)
+label(fd, 284, 113, "(modality-specific weights + joint attention)", 5.8, GREY)
+box(fd, 212, 76, 144, 28, ["Reasoner tower (AR):", "understand & reason"], colors.white, stroke=G3, fs=6.8)
+box(fd, 212, 28, 144, 28, ["Generator tower (Diffusion):", "generate video/audio/action"], colors.white, stroke=G1, fs=6.8)
+arrow(fd, 284, 76, 284, 68, color=G4, w=1.0)
+arrow(fd, 284, 56, 284, 64, color=G4, w=1.0)
+label(fd, 320, 64, "joint attn", 5.8, G4)
+arrow(fd, 366, 74, 382, 74)
+box(fd, 382, 42, 100, 64, ["OUTPUTS", "Text · Video", "Audio · Action", "(synchronised)"], colors.white, fs=7)
+label(fd, 235, 8, "one token sequence, aligned on a shared time axis by 3D mRoPE", 6.2, GREY)
+story.append(fd)
+caption("Figure 5c. Each modality is encoded into a shared space, concatenated into one sequence, and "
+        "processed by a two-tower Mixture-of-Transformers: separate weights per modality/tower, but "
+        "one global attention so audio, video, text and action all “see” each other.")
+
+p("1) A dedicated encoder per modality → one shared space", H3)
+enc = [
+    ["Modality", "How it enters the shared space"],
+    ["Text", "Token embeddings (like an LLM)"],
+    ["Image / Video", "A ViT for understanding; a VAE for generation"],
+    ["Audio", "A VAE encodes the sound, then a linear projection maps audio tokens into the hidden dimension"],
+    ["Action", "Domain-aware action vectors (robot / AV control)"],
+]
+ed = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(enc)]
+et = Table(ed, colWidths=[3.2*cm, 13.8*cm])
+et.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (-1,0), G4),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 2.5), ("BOTTOMPADDING", (0,0), (-1,-1), 2.5),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), ORNG_BG),
+    ("BACKGROUND", (1,2), (-1,2), ROW_ALT), ("BACKGROUND", (1,4), (-1,4), ROW_ALT),
+]))
+story.append(et)
+
+p("2) One sequence + global attention, aligned by 3D mRoPE", H3)
+p("All tokens are concatenated into <b>one sequence</b> with <b>global self-attention</b> &mdash; an "
+  "audio token can attend to a video token can attend to an action token. A unified <b>3D mRoPE</b> "
+  "puts video, audio and action tokens <b>on one shared temporal axis</b> &mdash; literally how the "
+  "model knows which sound goes with which frame and which action.", BODY)
+
+p("3) Mixture-of-Transformers — the “one group” mechanism", H3)
+p("In a plain transformer all modalities fight over the same weights. <b>MoT gives each "
+  "modality/tower its own weights</b> (feed-forward, attention projections, layer-norms) <b>while "
+  "sharing global attention</b> &mdash; specialisation without fragmentation. The <b>Reasoner</b> "
+  "(AR = understand) and <b>Generator</b> (diffusion = create) towers use separate parameters but "
+  "<b>joint attention</b>; the reasoner can run alone, generation activates both. Sizes: <b>Nano "
+  "16B</b> (8B+8B), <b>Super 64B</b> (32B+32B).", BODY)
+
+p("Managing the audio dataset specifically", H3)
+bullets([
+    "Audio is <b>ambient sound paired with video</b>, kept <b>temporally synchronised</b> and "
+    "VAE-encoded; aligned to video/action via the shared mRoPE time axis.",
+    "Curated through the same <b>multi-stage pipeline</b> (filter + quality review) as the rest of the "
+    "data, from NVIDIA-owned + commercially-permissive sources.",
+    "NVIDIA explicitly lists <b>“inaccurate sound–video alignment”</b> as a known failure mode &mdash; "
+    "audio&harr;video timing is the central hard problem (and why mRoPE matters). "
+    "<i>Granular audio-dataset counts are not publicly disclosed.</i>",
+])
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 8 — pretraining + post-training
 p("Pretraining and post-training: SFT and GRPO", H2)
 p("Modern Cosmos models are built in two phases. <b>Pretraining</b> soaks up broad knowledge from "
