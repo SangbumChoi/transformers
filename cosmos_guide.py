@@ -241,6 +241,126 @@ caption("Table 1. Each column is colour-coded and reused throughout this guide: 
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — platform / families
+p("Important: Cosmos is a PLATFORM, not a single model", H2)
+p("So far we compared “generations” (1, 2, 2.5, 3). But each generation is really a <b>bundle of "
+  "separate model families that do different jobs</b>. The autoregressive 4B model, for example, is "
+  "just one variant inside the <b>Predict</b> family of generation 1. There are three core “pillars” "
+  "plus shared tools.", BODY)
+
+# --- platform map diagram
+pm = Drawing(482, 175)
+# three pillars
+box(pm, 0, 118, 150, 50, ["Cosmos PREDICT", "generate / predict", "the future world → video"], colors.HexColor("#E8F5D5"), stroke=G1, fs=7.5)
+box(pm, 166, 118, 150, 50, ["Cosmos TRANSFER", "controllable sim→real", "from depth/seg/LiDAR maps"], BLUE_BG, stroke=G2, fs=7.5)
+box(pm, 332, 118, 150, 50, ["Cosmos REASON", "understand & decide", "(a vision-language model)"], PURP_BG, stroke=G3, fs=7.5)
+# relationships (annotation line, no crossing arrows)
+label(pm, 241, 106, "Reason is Predict's text encoder + critic    •    Transfer is built on Predict",
+      6.8, GREY)
+# tools row
+pm.add(Rect(0, 50, 482, 40, fillColor=colors.HexColor("#F4F4F4"), strokeColor=BORDER, strokeWidth=0.8, rx=4, ry=4))
+label(pm, 241, 95, "Shared tools (used by every family)", 7, DARK, bold=True)
+seg = ["Tokenizer\n(video↔tokens)", "Curator\n(data pipeline)", "Cosmos-RL\n(SFT + RL)", "Guardrails\n(safety)"]
+for i, s in enumerate(seg):
+    cx = 60 + i*120
+    lines = s.split("\n")
+    label(pm, cx, 72, lines[0], 7, DARK, bold=True)
+    label(pm, cx, 62, lines[1], 6, GREY)
+    if i < 3:
+        pm.add(Line(0+ (i+1)*120.5, 54, (i+1)*120.5, 86, strokeColor=BORDER, strokeWidth=0.6))
+# bottom note
+pm.add(Rect(0, 8, 482, 28, fillColor=ORNG_BG, strokeColor=G4, strokeWidth=0.9, rx=4, ry=4))
+label(pm, 241, 24, "Cosmos 3 MERGES all three pillars into ONE omnimodel", 8, DARK, bold=True)
+label(pm, 241, 14, "(reasoner tower = Reason; generator tower = Predict + Transfer; + audio & action)", 6.2, GREY)
+story.append(pm)
+caption("Platform map. Three pillars (Predict / Transfer / Reason) sit on shared tools. They "
+        "interconnect — and by Cosmos 3 they fuse into a single model.")
+
+p("The model families at a glance", H3)
+fam = [
+    ["Family", "Its job", "Input → Output", "Technique", "Versions"],
+    ["Predict", "Generate / predict the future world", "text/image/video → video",
+     "diffusion + AR (v1) → diffusion (v2) → flow (v2.5)", "1, 2, 2.5"],
+    ["Transfer", "Controllable generation; sim→real", "structure maps (depth, seg, edge, LiDAR, HD-map) + text → photorealistic video",
+     "(Multi-)ControlNet on top of Predict", "1, 2.5"],
+    ["Reason", "Understand & decide", "image/video + text → text reasoning, decisions, (v2) 2D/3D detections",
+     "vision-language model (VLM)", "1, 2"],
+    ["Tokenizer", "Compress video ↔ tokens", "video → continuous/discrete tokens",
+     "causal autoencoder (FSQ)", "1"],
+    ["Curator", "Prepare training data", "raw video → clean, captioned dataset",
+     "Ray GPU pipeline", "—"],
+    ["Cosmos-RL", "Train / fine-tune any family", "checkpoints + data → fine-tuned models",
+     "SFT + RL", "—"],
+    ["Guardrails", "Safety", "prompts/outputs → filtered content", "classifiers", "—"],
+]
+fd2 = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(fam)]
+ft = Table(fd2, colWidths=[2.0*cm, 3.4*cm, 5.6*cm, 4.0*cm, 1.6*cm], repeatRows=1)
+ftstyle = [
+    ("BACKGROUND", (0,0), (-1,0), DARK),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 4), ("RIGHTPADDING", (0,0), (-1,-1), 4),
+    ("BACKGROUND", (0,1), (0,1), colors.HexColor("#E8F5D5")),
+    ("BACKGROUND", (0,2), (0,2), BLUE_BG),
+    ("BACKGROUND", (0,3), (0,3), PURP_BG),
+]
+for i in [4,6]:
+    ftstyle.append(("BACKGROUND", (1,i), (-1,i), ROW_ALT))
+ft.setStyle(TableStyle(ftstyle))
+story.append(ft)
+caption("Table 1a. Predict, Transfer and Reason are different MODELS for different jobs — not "
+        "versions of one another. Generations 1/2/2.5 ship them separately; Cosmos 3 unifies them.")
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — within one family
+p("Diversity inside ONE family: Cosmos Predict 1", H2)
+p("To show how much sits inside a single family-and-generation: <b>Cosmos Predict 1 alone</b> is "
+  "about a dozen distinct checkpoints. The “autoregressive 4B” described earlier is just one of "
+  "them.", BODY)
+var = [
+    ["Variant", "Type", "What it does"],
+    ["Diffusion Text2World 7B / 14B", "diffusion", "text → video"],
+    ["Diffusion Video2World 7B / 14B", "diffusion", "image/video → future video"],
+    ["Autoregressive 4B / 12B", "GPT-style", "video → next frames (the one described earlier)"],
+    ["Autoregressive 5B / 13B Video2World", "GPT-style", "text + video → future video"],
+    ["Tokenizer CV / DV (×3 rates each)", "tokenizer", "compress / decompress video"],
+    ["Prompt Upsampler 12B", "LLM", "expand short prompts into rich captions"],
+    ["Diffusion Decoder 7B", "diffusion", "clean up the autoregressive output"],
+]
+vd = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(var)]
+vt = Table(vd, colWidths=[6.5*cm, 2.5*cm, 8.0*cm])
+vt.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (-1,0), G1),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), LIGHT_BG),
+    ("BACKGROUND", (1,2), (-1,2), ROW_ALT), ("BACKGROUND", (1,4), (-1,4), ROW_ALT),
+    ("BACKGROUND", (1,6), (-1,6), ROW_ALT),
+]))
+story.append(vt)
+caption("Table 1b. One family, one generation ≈ a dozen checkpoints. Multiply by Transfer + Reason "
+        "+ tools to see why “Cosmos 1” is a platform, not a model.")
+
+p("How the families work together", H3)
+bullets([
+    "<b>Reason → Predict:</b> Reason1 is reused as the <b>text encoder</b> inside Predict 2.5, and as "
+    "a <b>quality critic</b> during data curation.",
+    "<b>Predict → Transfer:</b> Transfer 2.5 is <b>built on top of</b> Predict 2.5 — a ControlNet "
+    "wrapped around it so you can steer generation with depth/segmentation/LiDAR maps.",
+    "<b>Transfer's special role:</b> it doesn't invent freely; it <b>converts a structured input</b> "
+    "(e.g. a simulator's segmentation video) into photorealistic video — the <b>sim-to-real</b> and "
+    "data-augmentation workhorse.",
+    "<b>Tokenizer / Curator / Cosmos-RL / Guardrails</b> feed and support every family.",
+])
+story.append(Paragraph(
+    "Takeaway: don't read Cosmos as one model getting bigger. Read it as a platform of specialised "
+    "families (Predict = imagine, Transfer = restyle/control, Reason = think) that generation 3 "
+    "finally fuses into a single omnimodel.", ANALOGY))
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 3 — architecture diagrams
 p("How the architecture changed (diagrams)", H2)
 
