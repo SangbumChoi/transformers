@@ -600,6 +600,34 @@ p("They are <b>complementary bets</b>. Diffusion is the <b>quality</b> champion;
   "autoregressive path's aggressive discrete compression <i>“can sometimes lead to undesired "
   "distortions”</i> &mdash; so a small diffusion model cleans its output back up.", BODY)
 
+p("Important: does this two-engine split apply to the OTHER families?", H3)
+p("<b>No.</b> The diffusion-vs-autoregressive choice is a <b>Predict</b> thing. Transfer, Reason and "
+  "the Tokenizer each use the one technique that fits their job:", BODY)
+tech = [
+    ["Family (gen 1)", "Diffusion?", "Autoregressive?", "Core technique"],
+    ["Predict 1", "Yes (7B/14B)", "Yes (4B/12B)", "BOTH — the only two-engine family"],
+    ["Transfer 1", "Yes", "No", "diffusion DiT + ControlNet (wraps Predict's diffusion)"],
+    ["Reason 1", "No", "Yes — over TEXT tokens", "decoder-only VLM (+ SFT/RL); “distinct from diffusion”"],
+    ["Tokenizer 1", "No", "No", "autoencoder — outputs continuous (→diffusion) & discrete (→AR) tokens"],
+]
+td2 = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(tech)]
+tt = Table(td2, colWidths=[2.6*cm, 2.0*cm, 3.2*cm, 9.2*cm])
+tt.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (-1,0), DARK),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,1), colors.HexColor("#E8F5D5")),
+    ("BACKGROUND", (0,2), (0,2), BLUE_BG),
+    ("BACKGROUND", (0,3), (0,3), PURP_BG),
+    ("BACKGROUND", (0,4), (0,4), LIGHT_BG),
+]))
+story.append(tt)
+caption("Table 2c. Only Predict has the two-engine split. Note “autoregressive” means different "
+        "things: Predict predicts the next discrete VIDEO token (future frames); Reason is a normal "
+        "LLM/VLM predicting the next TEXT token. In Cosmos 3 these become the two towers — generator "
+        "(diffusion, Predict+Transfer) and reasoner (autoregressive-text, Reason).")
+
 story.append(PageBreak())
 
 # ================================================================ PAGE — why each generation
