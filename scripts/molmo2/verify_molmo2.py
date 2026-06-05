@@ -1057,36 +1057,68 @@ def cmd_video_parity(args) -> int:
     print(f"[inputs] input_ids={tuple(inputs['input_ids'].shape)} "
           f"pixel_values_videos={tuple(inputs['pixel_values_videos'].shape)}")
 
+    eos_ids = set(getattr(processor.tokenizer, "all_special_ids", []))
+    eos_id = processor.tokenizer.eos_token_id
+    if eos_id is not None:
+        eos_ids.add(eos_id)
+
+    def manual_greedy(model, mk, type_key):
+        """Greedy decode by driving ``model.forward`` + a KV cache directly.
+
+        The original's *remote* ``prepare_inputs_for_generation`` is incompatible with the branch's
+        refactored ``generate`` loop (it indexes a ``cache_position`` the new loop no longer feeds the
+        same way). Forward itself is fine for both models, so we run the prefill once (with the image
+        tokens) and then feed one text token at a time with the cache — identical for original & port,
+        giving a full, comparable greedy sequence."""
+        ids = mk["input_ids"]
+        dev = ids.device
+        seqlen = ids.shape[1]
+        attn = mk.get("attention_mask")
+        if attn is None:
+            attn = torch.ones((1, seqlen), device=dev, dtype=torch.long)
+        prefill = dict(mk)
+        prefill["use_cache"] = True
+        prefill["cache_position"] = torch.arange(seqlen, device=dev)
+        with torch.no_grad():
+            out = model(**prefill)
+        logits0 = out.logits[0, -1].float().cpu()
+        past = out.past_key_values
+        nxt = int(out.logits[0, -1].argmax())
+        gen = [nxt]
+        for step in range(args.max_new_tokens - 1):
+            if nxt in eos_ids:
+                break
+            attn = torch.cat([attn, torch.ones((1, 1), device=dev, dtype=attn.dtype)], dim=1)
+            step_kwargs = dict(
+                input_ids=torch.tensor([[nxt]], device=dev),
+                attention_mask=attn,
+                past_key_values=past,
+                use_cache=True,
+                cache_position=torch.tensor([seqlen + step], device=dev),
+            )
+            if type_key is not None:  # decode tokens are text -> type 0
+                step_kwargs[type_key] = torch.zeros((1, 1), device=dev, dtype=torch.long)
+            with torch.no_grad():
+                out = model(**step_kwargs)
+            past = out.past_key_values
+            nxt = int(out.logits[0, -1].argmax())
+            gen.append(nxt)
+        return logits0, torch.tensor(gen)
+
     def run(model, tag, rename=None):
         # The in-library processor emits ``mm_token_type_ids``; the original remote model wants the
-        # same tensor under its native name ``token_type_ids`` (dropping it leaves its multimodal
-        # merge indexing a None). Apply the per-model rename first, then auto-drop any *other* kwarg a
-        # model reports as unused and retry — so each model runs the identical tensors it accepts.
+        # same tensor under its native name ``token_type_ids``. Apply the per-model rename, then run a
+        # manual cached greedy decode (bypassing the incompatible remote generate loop).
         mk = dict(inputs)
         for src, dst in (rename or {}).items():
             if src in mk:
                 mk[dst] = mk.pop(src)
                 print(f"[{tag}] renamed {src} -> {dst}")
-        for _ in range(5):
-            try:
-                with torch.no_grad():
-                    logits = model(**mk, use_cache=False).logits[0, -1].float().cpu()
-                    gen = model.generate(**mk, max_new_tokens=args.max_new_tokens, do_sample=False)
-                break
-            except (ValueError, TypeError) as e:
-                m = re.search(r"not used by the model: \[([^\]]*)\]", str(e))
-                if not m:
-                    raise
-                drop = [s.strip().strip("'\"") for s in m.group(1).split(",") if s.strip()]
-                print(f"[{tag}] dropping unused kwargs: {drop}")
-                for d in drop:
-                    mk.pop(d, None)
-        else:
-            raise RuntimeError(f"[{tag}] could not satisfy model kwargs after dropping")
-        tok = gen[0, n:].cpu()
-        text = processor.batch_decode(gen[:, n:], skip_special_tokens=True)[0]
+        type_key = next((k for k in ("token_type_ids", "mm_token_type_ids") if k in mk), None)
+        logits, tok = manual_greedy(model, mk, type_key)
+        text = processor.batch_decode(tok.unsqueeze(0), skip_special_tokens=True)[0]
         print(f"[{tag}] kept_keys={sorted(mk)}")
-        print(f"[{tag}] generated: {text}")
+        print(f"[{tag}] generated ({len(tok)} tok): {text}")
         return logits, tok, text
 
     # ---- Phase 1: ORIGINAL (remote code) ----
