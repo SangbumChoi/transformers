@@ -1058,11 +1058,29 @@ def cmd_video_parity(args) -> int:
           f"pixel_values_videos={tuple(inputs['pixel_values_videos'].shape)}")
 
     def run(model, tag):
-        with torch.no_grad():
-            logits = model(**inputs, use_cache=False).logits[0, -1].float().cpu()
-            gen = model.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
+        # The port processor emits port-specific keys (e.g. ``mm_token_type_ids``) the original
+        # remote model does not consume; auto-drop any kwarg a model reports as unused and retry, so
+        # each model sees exactly the inputs it accepts on the *same* underlying tensors.
+        mk = dict(inputs)
+        for _ in range(5):
+            try:
+                with torch.no_grad():
+                    logits = model(**mk, use_cache=False).logits[0, -1].float().cpu()
+                    gen = model.generate(**mk, max_new_tokens=args.max_new_tokens, do_sample=False)
+                break
+            except (ValueError, TypeError) as e:
+                m = re.search(r"not used by the model: \[([^\]]*)\]", str(e))
+                if not m:
+                    raise
+                drop = [s.strip().strip("'\"") for s in m.group(1).split(",") if s.strip()]
+                print(f"[{tag}] dropping unused kwargs: {drop}")
+                for d in drop:
+                    mk.pop(d, None)
+        else:
+            raise RuntimeError(f"[{tag}] could not satisfy model kwargs after dropping")
         tok = gen[0, n:].cpu()
         text = processor.batch_decode(gen[:, n:], skip_special_tokens=True)[0]
+        print(f"[{tag}] kept_keys={sorted(mk)}")
         print(f"[{tag}] generated: {text}")
         return logits, tok, text
 
