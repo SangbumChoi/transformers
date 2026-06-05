@@ -276,6 +276,28 @@ def _patch_for_coexistence():
 
         mru.ROPE_INIT_FUNCTIONS["default"] = _default_rope
 
+    # The branch renamed the masking helpers' ``input_embeds`` kwarg to ``inputs_embeds``; the remote
+    # code still passes ``input_embeds``. Shim the module-level names *before* the remote module's
+    # ``from ...masking_utils import create_causal_mask`` binds them, translating the old kwarg. The
+    # in-library port already imported the real functions at startup, so it is unaffected.
+    import transformers.masking_utils as mu
+
+    for _fname in ("create_causal_mask", "create_masks_for_generate", "create_sliding_window_causal_mask"):
+        _orig = getattr(mu, _fname, None)
+        if _orig is None or getattr(_orig, "_kwshim", False):
+            continue
+
+        def _make_shim(orig):
+            def shim(*a, **k):
+                if "input_embeds" in k and "inputs_embeds" not in k:
+                    k["inputs_embeds"] = k.pop("input_embeds")
+                return orig(*a, **k)
+
+            shim._kwshim = True
+            return shim
+
+        setattr(mu, _fname, _make_shim(_orig))
+
 
 @dataclass
 class HookStore:
