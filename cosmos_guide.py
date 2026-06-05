@@ -16,7 +16,7 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     HRFlowable, KeepTogether, PageBreak,
 )
-from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
+from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon, Circle
 from reportlab.graphics.charts.barcharts import VerticalBarChart, HorizontalBarChart
 from reportlab.graphics.charts.legends import Legend
 
@@ -710,6 +710,84 @@ story.append(Paragraph(
     "Analogy: full attention = everyone in a stadium trying to talk to everyone else at once "
     "(chaos, won't scale). Neighbourhood attention = each person only talks to their own row and "
     "the rows just ahead/behind &mdash; you keep all the context that matters, and it scales.",
+    ANALOGY))
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — flow matching zoom-in
+p("Zoom-in: what is “flow matching”? (the Cosmos 2.5 trick)", H2)
+p("Cosmos 2.5 switched from <b>diffusion</b> to a <b>flow-based</b> model. Here is what that means, "
+  "again with no maths.", BODY)
+
+p("Diffusion takes a wandering path", H3)
+p("Recall the diffusion “sculptor”: it turns noise into video with <b>many tiny denoising steps</b>. "
+  "The path it follows from pure noise to a finished video is <b>curved and wandering</b>, so it "
+  "needs <i>lots</i> of small steps (often 30–50+) to stay on track. Each step is a full pass through "
+  "a huge model &mdash; so many steps = slow.", BODY)
+
+p("Flow matching learns a straight “current” instead", H3)
+p("Picture noise on the left and real video on the right. Flow matching teaches the model a "
+  "<b>direction to move</b> at every point &mdash; “which way, and how fast, to get from noise toward "
+  "data”. It trains by connecting each noise sample to a real sample with a <b>straight line</b> and "
+  "learning to follow it. Because the target paths are <b>nearly straight</b>, you can take "
+  "<b>big steps</b> and still land in the right place &mdash; so you need <b>far fewer steps</b>.", BODY)
+
+# --- diagram: curved many-step vs straight few-step
+def path_marker_start(d, x, y):
+    for dx, dy in [(-4,3), (3,5), (5,-3), (-3,-4), (0,0)]:
+        d.add(Circle(x+dx, y+dy, 2.0, fillColor=colors.HexColor("#BBBBBB"),
+                     strokeColor=colors.white, strokeWidth=0.4))
+
+dia = Drawing(482, 165)
+# start (noise) and end (video) markers, shared columns
+x0, x1 = 70, 410
+# --- diffusion path (top)
+yt = 120
+path_marker_start(dia, x0, yt)
+import math as _m
+n = 9
+pts = []
+for i in range(n+1):
+    t = i/n
+    x = x0 + (x1-x0)*t
+    y = yt + 16*_m.sin(t*_m.pi*3.2)*(1-t*0.3)
+    pts.append((x, y))
+for i in range(len(pts)-1):
+    dia.add(Line(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1],
+                 strokeColor=G2, strokeWidth=1.2))
+for (x, y) in pts[1:]:
+    dia.add(Circle(x, y, 2.4, fillColor=G2, strokeColor=colors.white, strokeWidth=0.4))
+dia.add(Rect(x1-4, yt-6, 12, 12, fillColor=G1, strokeColor=DARK, strokeWidth=0.6))
+label(dia, x0, yt+26, "noise", 7, GREY)
+label(dia, x1+4, yt+18, "video", 7, GREY)
+label(dia, 240, yt+30, "DIFFUSION (Cosmos 1–2): curved path, MANY small steps", 8, DARK, bold=True)
+# --- flow path (bottom)
+yb = 50
+path_marker_start(dia, x0, yb)
+fpts = [(x0, yb), (x0+(x1-x0)*0.34, yb), (x0+(x1-x0)*0.67, yb), (x1, yb)]
+for i in range(len(fpts)-1):
+    dia.add(Line(fpts[i][0], fpts[i][1], fpts[i+1][0], fpts[i+1][1],
+                 strokeColor=G3, strokeWidth=1.4))
+for (x, y) in fpts[1:]:
+    dia.add(Circle(x, y, 2.6, fillColor=G3, strokeColor=colors.white, strokeWidth=0.4))
+dia.add(Rect(x1-4, yb-6, 12, 12, fillColor=G1, strokeColor=DARK, strokeWidth=0.6))
+label(dia, x0, yb+24, "noise", 7, GREY)
+label(dia, x1+4, yb+16, "video", 7, GREY)
+label(dia, 240, yb-22, "FLOW MATCHING (Cosmos 2.5): near-straight path, FEW big steps", 8, DARK, bold=True)
+story.append(dia)
+caption("Figure 5b. Same start (noise) and destination (video). Diffusion zig-zags there in many "
+        "small steps; flow matching learns a near-straight route it can cover in a few big steps.")
+
+p("Why Cosmos 2.5 switched to it", H3)
+bullets([
+    "<b>Fewer sampling steps → faster &amp; more resource-efficient</b> &mdash; important for 30-second, "
+    "multi-camera video.",
+    "<b>A cleaner, more stable training objective</b> (simply “match the direction”), which made it "
+    "easier to build <b>one unified model</b> for Text/Image/Video-to-World instead of three.",
+])
+story.append(Paragraph(
+    "Analogy: diffusion is a windy mountain road with dozens of turns (many careful steps); flow "
+    "matching is a straight highway to the same town &mdash; fewer, bigger moves to arrive.",
     ANALOGY))
 
 story.append(PageBreak())
