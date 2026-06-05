@@ -991,6 +991,88 @@ def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
+def cmd_video_parity(args) -> int:
+    """Compare original (remote code) vs in-library port on a *video* pointing prompt.
+
+    Same sequential, memory-safe scheme as ``parity``: load the original, run it, free it, then load
+    the port and run it on the *identical* inputs. Reports final-logits diff, greedy-token agreement,
+    and both decoded `<points coords=...>` payloads so we can see whether any missed/extra point is a
+    port regression or simply how the original behaves."""
+    torch = _torch()
+    from transformers import (
+        AutoModelForImageTextToText,
+        Molmo2Config,
+        Molmo2ForConditionalGeneration,
+    )
+    from transformers.video_utils import load_video
+
+    torch_dtype = getattr(torch, args.dtype)
+    _patch_for_coexistence()
+
+    processor = load_processor(args.model_id)
+    video, metadata = load_video(args.video)
+    print(f"[video] {args.video}\n        frames={getattr(video, 'shape', None)} "
+          f"sampled_to={args.num_frames}")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": args.prompt}, {"type": "video", "video": video},
+    ]}]
+    inputs = processor.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=True, return_tensors="pt", return_dict=True,
+        video_metadata=[metadata], do_sample_frames=True, num_frames=args.num_frames,
+    ).to(args.device)
+    n = inputs["input_ids"].shape[1]
+    print(f"[inputs] input_ids={tuple(inputs['input_ids'].shape)} "
+          f"pixel_values_videos={tuple(inputs['pixel_values_videos'].shape)}")
+
+    def run(model, tag):
+        with torch.no_grad():
+            logits = model(**inputs, use_cache=False).logits[0, -1].float().cpu()
+            gen = model.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
+        tok = gen[0, n:].cpu()
+        text = processor.batch_decode(gen[:, n:], skip_special_tokens=True)[0]
+        print(f"[{tag}] generated: {text}")
+        return logits, tok, text
+
+    # ---- Phase 1: ORIGINAL (remote code) ----
+    print(f"[phase 1] original (remote code) {args.model_id} dtype={args.dtype} attn={args.attn}")
+    original = AutoModelForImageTextToText.from_pretrained(
+        args.model_id, trust_remote_code=True, dtype=torch_dtype, attn_implementation=args.attn
+    ).to(args.device).eval()
+    o_logits, o_tok, o_text = run(original, "original")
+    del original
+    _free()
+
+    # ---- Phase 2: PORT (in-library, remapped weights) ----
+    print("[phase 2] in-library port from remapped weights")
+    local_ckpt = convert_to_local_checkpoint(args.model_id, "/tmp/molmo2_port_ckpt", args.dtype)
+    config = Molmo2Config.from_pretrained(args.model_id, trust_remote_code=False)
+    config._attn_implementation = args.attn
+    port = Molmo2ForConditionalGeneration.from_pretrained(
+        local_ckpt, config=config, dtype=torch_dtype, attn_implementation=args.attn, device_map=args.device,
+    ).eval()
+    p_logits, p_tok, p_text = run(port, "port")
+    del port
+    _free()
+
+    # ---- Compare ----
+    logits_diff = (o_logits - p_logits).abs().max().item()
+    top1_match = o_logits.argmax().item() == p_logits.argmax().item()
+    m = min(len(o_tok), len(p_tok))
+    tok_match = bool((o_tok[:m] == p_tok[:m]).all())
+    first_div = next((i for i in range(m) if o_tok[i] != p_tok[i]), None)
+    print("\n=== video parity summary ===")
+    print(f"final logits diff : {logits_diff:.3e}")
+    print(f"argmax next token : {'MATCH' if top1_match else 'MISMATCH'}")
+    print(f"greedy tokens     : {'MATCH' if tok_match else 'MISMATCH'} over {m} tokens"
+          + ("" if tok_match else f" (first divergence at token {first_div})"))
+    print(f"text identical    : {o_text == p_text}")
+    ok = top1_match and tok_match
+    if args.dtype == "float32":
+        ok = ok and logits_diff < args.tol
+    print(f"VIDEO PARITY {'PASS' if ok else 'FAIL'}")
+    return 0 if ok else 1
+
+
 def cmd_upload(args) -> int:
     """Convert the original checkpoint to the in-library Molmo2 layout and push it to the Hub.
 
@@ -1125,6 +1207,13 @@ def main() -> int:
     sp = sub.add_parser("reference", help="dump original outputs for cross-version compare")
     common(sp)
 
+    sp = sub.add_parser("video-parity", help="original vs port greedy/logits compare on a video")
+    common(sp)
+    sp.set_defaults(prompt="Point to the penguins.", attn="sdpa", dtype="bfloat16", max_new_tokens=256)
+    sp.add_argument("--video", default=DEFAULT_VIDEO)
+    sp.add_argument("--num-frames", type=int, default=24)
+    sp.add_argument("--tol", type=float, default=2e-2)
+
     sp = sub.add_parser("upload", help="convert original -> in-library layout and push to the Hub")
     sp.add_argument("--model-id", default=MODEL_ID)
     sp.add_argument("--dtype", default="bfloat16", choices=["float32", "bfloat16", "float16"])
@@ -1140,6 +1229,8 @@ def main() -> int:
         return cmd_demo(args)
     if args.cmd == "reference":
         return cmd_reference(args)
+    if args.cmd == "video-parity":
+        return cmd_video_parity(args)
     if args.cmd == "upload":
         return cmd_upload(args)
     return 2
