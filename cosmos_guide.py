@@ -628,6 +628,92 @@ p("<b>Diffusion</b> (Cosmos 1–2) = many denoising steps = top quality but slow
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — sparse attention zoom-in
+p("Zoom-in: what is “sparse attention”? (the Cosmos 2 trick)", H2)
+p("Cosmos 2's headline speedup (up to 2.6×) comes from <b>sparse attention</b>. Here is the idea "
+  "with no maths.", BODY)
+
+p("The problem: “attention” is very expensive for video", H3)
+p("Inside a Transformer, every token (think: every little patch of the video) <b>looks at every "
+  "other token</b> to decide what is relevant. That is called <b>full attention</b>. A short 720p "
+  "video is <b>tens of thousands of patches</b> (frames × height × width), and full attention "
+  "compares <i>every patch with every other patch</i> &mdash; so the cost grows "
+  "<b>quadratically</b>: double the patches → <b>4×</b> the work. For video, this one step dominates "
+  "the whole generation time.", BODY)
+
+p("The insight: most of those comparisons are wasted", H3)
+p("A patch in the top-left of frame 1 has almost nothing to do with a patch in the bottom-right "
+  "three seconds later. What actually matters to a patch is its <b>neighbours</b> &mdash; nearby in "
+  "space, and a frame or two before/after.", BODY)
+
+# --- diagram: full vs neighborhood attention
+def attn_grid(d, ox, oy, cell=15, n=5, neighborhood=False):
+    cx = cy = n // 2
+    # connection lines from center
+    cxpix = ox + cx*cell + cell/2
+    cypix = oy + cy*cell + cell/2
+    for r in range(n):
+        for c in range(n):
+            if r == cx and c == cy:
+                continue
+            if neighborhood and (abs(r-cx) > 1 or abs(c-cy) > 1):
+                continue
+            px = ox + c*cell + cell/2
+            py = oy + r*cell + cell/2
+            d.add(Line(cxpix, cypix, px, py,
+                       strokeColor=colors.HexColor("#BBBBBB"), strokeWidth=0.5))
+    # dots
+    for r in range(n):
+        for c in range(n):
+            px = ox + c*cell
+            py = oy + r*cell
+            if r == cx and c == cy:
+                fill = G2
+            elif neighborhood and (abs(r-cx) <= 1 and abs(c-cy) <= 1):
+                fill = colors.HexColor("#AED6F1")
+            elif neighborhood:
+                fill = colors.HexColor("#EEEEEE")
+            else:
+                fill = colors.HexColor("#AED6F1")
+            d.add(Rect(px, py, cell-3, cell-3, fillColor=fill,
+                       strokeColor=colors.white, strokeWidth=0.5))
+
+dia = Drawing(482, 150)
+attn_grid(dia, 40, 35, neighborhood=False)
+label(dia, 78, 18, "FULL attention", 8, DARK, bold=True)
+label(dia, 78, 6, "1 patch → ALL others (wasteful)", 7, GREY)
+# arrow between
+arrow(dia, 175, 75, 235, 75, color=G2, w=1.4)
+label(dia, 205, 85, "make it", 7, G2, bold=True)
+label(dia, 205, 62, "sparse", 7, G2, bold=True)
+attn_grid(dia, 300, 35, neighborhood=True)
+label(dia, 338, 18, "NEIGHBOURHOOD (sparse) attention", 8, DARK, bold=True)
+label(dia, 338, 6, "1 patch → only nearby patches (cheap)", 7, GREY)
+story.append(dia)
+caption("Figure 5a. Left: every patch attends to all others (lines everywhere). Right: each patch "
+        "attends only to its local window — the grey patches are skipped. Cosmos 2 (via the NATTEN "
+        "library) drops up to 98% of the connections, keeping only the ~2% that matter.")
+
+p("The fix: Neighbourhood Attention (NATTEN)", H3)
+p("Instead of attending to <b>all</b> patches, each patch attends only to those in a small "
+  "<b>local window</b> around it (in space and time). Cosmos 2 pushed this so <b>up to 98% of the "
+  "attention connections are dropped</b> (sparsity raised “from 50% to 98%”) &mdash; only the most "
+  "relevant ones are computed.", BODY)
+bullets([
+    "<b>Result:</b> far fewer calculations → <b>1.7×–2.6× faster</b> at 720p, with quality "
+    "essentially preserved (the dropped links were the unimportant ones).",
+    "<b>Bonus:</b> it is an inference-time efficiency change, not a bigger model &mdash; related "
+    "“Generalized Neighbourhood Attention” can even be plugged into existing models for 28–46% "
+    "speedups <b>without any retraining</b>.",
+])
+story.append(Paragraph(
+    "Analogy: full attention = everyone in a stadium trying to talk to everyone else at once "
+    "(chaos, won't scale). Neighbourhood attention = each person only talks to their own row and "
+    "the rows just ahead/behind &mdash; you keep all the context that matters, and it scales.",
+    ANALOGY))
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 8 — pretraining + post-training
 p("Pretraining and post-training: SFT and GRPO", H2)
 p("Modern Cosmos models are built in two phases. <b>Pretraining</b> soaks up broad knowledge from "
