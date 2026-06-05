@@ -14,7 +14,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    HRFlowable, KeepTogether, PageBreak,
+    HRFlowable, KeepTogether, PageBreak, Image as RLImage,
 )
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon, Circle
 from reportlab.graphics.charts.barcharts import VerticalBarChart, HorizontalBarChart
@@ -1215,8 +1215,8 @@ story.append(PageBreak())
 # ================================================================ PAGE — verification / fact-check
 p("Verification & source audit", H2)
 p("Every quantitative claim in this guide was cross-checked against primary sources "
-  "(NVIDIA papers, research pages, and the official Cosmos 3 release). Of 13 checked claims, "
-  "<b>11 verified exactly</b>; <b>2 carry source-version or disclosure caveats</b> (marked “!”). "
+  "(NVIDIA papers, research pages, and the official Cosmos 3 release). Of 20 checked claims, "
+  "<b>18 verified</b> against a primary/official source; <b>2 carry caveats</b> (marked “!”). "
   "No factual errors were found in any claim that could be checked against a primary source.", BODY)
 
 audit = [
@@ -1227,8 +1227,9 @@ audit = [
     ["4", "AdaLN-LoRA rank 256; LR 2^-15 / 2^-16; context 56,320", "arXiv 2501.03575", "OK — exact"],
     ["5", "Autoregressive 4B / 12B (+ 5B / 13B Video2World)", "arXiv 2501.03575", "OK — exact"],
     ["6", "Trained on ~10,000 H100 GPUs for ~3 months", "arXiv 2501.03575", "OK — exact"],
-    ["7", "Tokenizer up to 12× faster than prior (CogVideoX)", "arXiv 2501.03575", "OK"],
-    ["8", "Cosmos 2: 0.6B/2B/14B; sparse attn up to 2.6×; 480/704p", "GitHub + NVIDIA blog", "OK"],
+    ["7", "Tokenizer up to 12× faster; sparse attn (NATTEN) 50→98% sparsity, 1.7–2.6×",
+     "arXiv 2501.03575; arXiv 2504.16922", "OK"],
+    ["8", "Cosmos 2: 0.6B/2B/14B; 480/704p; flow matching in 2.5", "GitHub + NVIDIA blog", "OK"],
     ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
      "NVIDIA research page", "OK"],
     ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
@@ -1238,6 +1239,20 @@ audit = [
      "NVIDIA newsroom (Jun 2026)", "OK"],
     ["13", "Cosmos 3 data = 20T tokens, ~1B images, ~400M videos",
      "Press coverage (not NVIDIA)", "CAVEAT — see below"],
+    ["14", "Platform families: Predict / Transfer / Reason + Tokenizer / Curator / RL / Guardrails",
+     "Cosmos docs + DeepWiki", "OK"],
+    ["15", "Predict 1 variants (diffusion 7/14B, AR 4/12B, 5/13B V2W, upsampler, decoder)",
+     "arXiv 2501.03575 + GitHub", "OK"],
+    ["16", "Transfer = (Multi-)ControlNet on Predict; controls depth/edge/seg/LiDAR/HD-map",
+     "Cosmos docs + GitHub", "OK"],
+    ["17", "Transfer 2.5 built on Predict 2.5; 2B is 3.5× smaller than Transfer1-7B; "
+     "control blocks distributed 1 per 7 (vs at start)", "NVIDIA research page", "OK — exact"],
+    ["18", "Reason 1 = hybrid Mamba-MLP-Transformer; 16K context; SFT + RL",
+     "arXiv 2503.15558 (html)", "OK — exact"],
+    ["19", "Reason 2 = 2B/8B; 256K context (up from 16K); OCR + 2D/3D localization; #1 open",
+     "NVIDIA/HF Reason 2 blog", "OK — exact"],
+    ["20", "Cosmos 3 = two-tower MoT (Nano 16B = 8+8, Super 64B = 32+32); ViT/VAE encoders; 3D mRoPE",
+     "NVIDIA/HF Cosmos 3 blog", "OK"],
 ]
 ad = []
 for i, r in enumerate(audit):
@@ -1307,12 +1322,74 @@ p("Cosmos went from <b>“many tools that dream video”</b> (1) → <b>“the b
   "→ <b>“one smart unified tool”</b> (2.5) → <b>“a reasoning, seeing, hearing, acting "
   "omnimodel”</b> (3).", BODY)
 
-spacer(10)
-p("Sources: NVIDIA <i>Cosmos World Foundation Model Platform</i> (arXiv:2501.03575); "
-  "<i>Cosmos-Reason1: From Physical Common Sense to Embodied Reasoning</i> (arXiv:2503.15558); "
-  "NVIDIA Research pages for Cosmos-Predict2.5 and Cosmos-Reason1; NVIDIA developer blogs for "
-  "Cosmos-Predict2; Hugging Face NVIDIA blog on Cosmos Predict/Transfer 2.5; NVIDIA newsroom "
-  "release for Cosmos 3 (Jun 2026). Figures are illustrative; numbers quoted from these sources. "
+story.append(PageBreak())
+
+# ================================================================ APPENDIX A — example results
+from PIL import Image as _PILImage
+def fig_image(path, max_w_cm=15.0):
+    iw, ih = _PILImage.open(path).size
+    w = max_w_cm * cm
+    h = w * ih / iw
+    return RLImage(path, width=w, height=h)
+
+p("Appendix A — Example results (from NVIDIA's pages)", H2)
+p("These are real result figures and example inputs taken from NVIDIA's official Cosmos pages, "
+  "reproduced here for educational reference. © NVIDIA; see the link under each image.", SMALL)
+
+p("A1 · Cosmos Predict 2.5 — human-preference win rate vs. Wan baselines", H3)
+story.append(fig_image("cosmos_assets/predict25_winrate.jpg", 7.0))
+caption("Predict 2.5 (2B) “win / tie / lose” against Wan 2.2 (5B) and Wan 2.1 (14B) in human "
+        "preference — a small model competitive with much larger baselines. "
+        "Source: research.nvidia.com/labs/cosmos-lab/cosmos-predict2.5/")
+
+p("A2 · Cosmos Transfer 2.5 (2B) vs. Transfer 1 (7B) — quality across long videos", H3)
+story.append(fig_image("cosmos_assets/transfer25_rnds.jpg", 10.5))
+caption("Averaged RNDS (higher = better) across video “chunk index” for Edge / Blur / Depth / "
+        "Segmentation control. Transfer 2.5-2B (green) stays high while Transfer 1-7B (blue) degrades "
+        "over long sequences — the 3.5× smaller model is also better. "
+        "Source: research.nvidia.com/labs/cosmos-lab/cosmos-transfer2.5/ (Figure 8)")
+
+p("A3 · What Cosmos Transfer ingests — example control inputs", H3)
+story.append(fig_image("cosmos_assets/transfer_controls.jpg", 12.5))
+caption("Left→right: depth, segmentation and edge control maps. Cosmos Transfer turns structured "
+        "inputs like these into photorealistic video (sim-to-real). "
+        "Source: research.nvidia.com/labs/cosmos-lab/cosmos-transfer2.5/")
+
+story.append(PageBreak())
+
+# ================================================================ APPENDIX B — references
+p("Appendix B — References & further reading", H2)
+def ref(title, url):
+    story.append(Paragraph("• <b>%s</b><br/><font color='#2E86C1'>%s</font>" % (title, url), SMALL))
+
+p("Primary papers", H3)
+ref("Cosmos World Foundation Model Platform for Physical AI (Cosmos 1)", "https://arxiv.org/abs/2501.03575")
+ref("Cosmos-Reason1: From Physical Common Sense to Embodied Reasoning", "https://arxiv.org/abs/2503.15558")
+ref("Mixture-of-Transformers: A Sparse, Scalable Multi-Modal Architecture", "https://arxiv.org/abs/2411.04996")
+ref("Generalized Neighborhood Attention (sparse attention / NATTEN)", "https://arxiv.org/abs/2504.16922")
+
+p("NVIDIA research & model pages", H3)
+ref("Cosmos-Predict2.5", "https://research.nvidia.com/labs/cosmos-lab/cosmos-predict2.5/")
+ref("Cosmos-Transfer2.5", "https://research.nvidia.com/labs/cosmos-lab/cosmos-transfer2.5/")
+ref("Cosmos 3 technical report", "https://research.nvidia.com/labs/cosmos-lab/cosmos3/technical-report.pdf")
+ref("Cosmos model families (docs / DeepWiki)", "https://deepwiki.com/nvidia-cosmos/cosmos-cookbook/3-cosmos-model-families")
+
+p("Blogs & announcements", H3)
+ref("HF: Cosmos Predict 2.5 & Transfer 2.5", "https://huggingface.co/blog/nvidia/cosmos-predict-and-transfer2-5")
+ref("HF: Cosmos Reason 2 brings advanced reasoning", "https://huggingface.co/blog/nvidia/nvidia-cosmos-reason-2-brings-advanced-reasoning")
+ref("HF: Welcome Cosmos 3 for Physical AI", "https://huggingface.co/blog/nvidia/cosmos-3-for-physical-ai")
+ref("NVIDIA blog: Develop Physical AI with Cosmos 3", "https://developer.nvidia.com/blog/develop-physical-ai-reasoning-world-and-action-models-with-nvidia-cosmos-3/")
+ref("NVIDIA newsroom: Cosmos 3 launch (Jun 2026)", "https://nvidianews.nvidia.com/news/nvidia-launches-cosmos-3-the-open-frontier-foundation-model-for-physical-ai")
+
+p("GitHub", H3)
+ref("cosmos-predict1 / predict2 / predict2.5", "https://github.com/nvidia-cosmos")
+ref("cosmos-transfer1 / transfer2.5", "https://github.com/nvidia-cosmos")
+ref("cosmos-reason1 / reason2", "https://github.com/nvidia-cosmos")
+
+spacer(8)
+p("Images in Appendix A are © NVIDIA, reproduced from the linked pages for non-commercial "
+  "educational reference. All numeric claims are quoted from the sources above; where sources "
+  "disagree or NVIDIA has not published a figure, this is flagged on the verification page. "
   "Educational summary.", SMALL)
 
 
