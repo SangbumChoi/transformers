@@ -361,6 +361,136 @@ story.append(Paragraph(
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — per-family evolution
+p("Each family evolved on its OWN cadence (not in lockstep)", H2)
+p("A subtle but important point: Predict, Transfer and Reason did <b>not</b> all version together. "
+  "Predict went 1→2→2.5; Transfer jumped 1→2.5 (no public “2”); Reason has its own 1→2 track. The "
+  "“generation” labels really follow <b>Predict</b>. And each generation is <b>not</b> equally "
+  "“diverse”:", BODY)
+
+div = [
+    ["Era", "Predict", "Transfer", "Reason", "How diverse?"],
+    ["Cosmos 1\n(2025 H1)", "Predict 1", "Transfer 1", "Reason 1", "Full platform"],
+    ["Cosmos 2\n(mid 2025)", "Predict 2", "—", "—", "Mostly a Predict-only refresh"],
+    ["Cosmos 2.5\n(Sep 2025)", "Predict 2.5", "Transfer 2.5", "Reason 1 reused (Reason 2 later)", "Full platform again"],
+    ["Cosmos 3\n(Jun 2026)", "→ generator tower", "→ folded in", "→ reasoner tower", "Unified into ONE model"],
+]
+dv = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(div)]
+dvt = Table(dv, colWidths=[2.6*cm, 2.8*cm, 2.8*cm, 4.3*cm, 4.5*cm], repeatRows=1)
+dvstyle = [
+    ("BACKGROUND", (0,0), (-1,0), DARK),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    ("LEFTPADDING", (0,0), (-1,-1), 4),
+    ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#EEEEEE")),
+    ("BACKGROUND", (1,2), (-1,2), ROW_ALT),
+    ("BACKGROUND", (4,4), (4,4), ORNG_BG),
+]
+dvt.setStyle(TableStyle(dvstyle))
+story.append(dvt)
+caption("Table 1c. Cosmos 2 was a Predict upgrade; 2.5 restored the full platform; Cosmos 3's "
+        "novelty is that it STOPS being a platform of separate models and fuses them.")
+
+# --- swimlane diagram
+p("The three families converging into Cosmos 3", H3)
+sw = Drawing(482, 185)
+# time axis labels
+for x, t in [(70,"2025 H1"), (170,"mid-25"), (270,"Sep-25"), (350,"2026")]:
+    label(sw, x, 172, t, 6.5, GREY)
+# lane labels
+label(sw, 4, 138, "PREDICT", 7.5, G1, anchor="start", bold=True)
+label(sw, 4, 92, "TRANSFER", 7.5, G2, anchor="start", bold=True)
+label(sw, 4, 46, "REASON", 7.5, G3, anchor="start", bold=True)
+def node(d, x, y, txt, fill, stroke):
+    d.add(Rect(x-18, y-9, 36, 18, fillColor=fill, strokeColor=stroke, strokeWidth=0.9, rx=3, ry=3))
+    d.add(String(x, y-3, txt, textAnchor="middle", fontSize=7, fontName="Helvetica-Bold", fillColor=DARK))
+# predict lane y=138
+sw.add(Line(70, 138, 270, 138, strokeColor=G1, strokeWidth=1.0))
+node(sw, 70, 138, "P1", colors.HexColor("#E8F5D5"), G1)
+node(sw, 170, 138, "P2", colors.HexColor("#E8F5D5"), G1)
+node(sw, 270, 138, "P2.5", colors.HexColor("#E8F5D5"), G1)
+# transfer lane y=92
+sw.add(Line(70, 92, 270, 92, strokeColor=G2, strokeWidth=1.0, strokeDashArray=[3,2]))
+node(sw, 70, 92, "T1", BLUE_BG, G2)
+node(sw, 270, 92, "T2.5", BLUE_BG, G2)
+# reason lane y=46
+sw.add(Line(70, 46, 350, 46, strokeColor=G3, strokeWidth=1.0))
+node(sw, 70, 46, "R1", PURP_BG, G3)
+node(sw, 350, 46, "R2", PURP_BG, G3)
+# cosmos 3 node
+sw.add(Rect(408, 40, 66, 100, fillColor=ORNG_BG, strokeColor=G4, strokeWidth=1.1, rx=5, ry=5))
+sw.add(String(441, 98, "COSMOS 3", textAnchor="middle", fontSize=7.5, fontName="Helvetica-Bold", fillColor=DARK))
+sw.add(String(441, 88, "omnimodel", textAnchor="middle", fontSize=6.5, fillColor=GREY))
+sw.add(String(441, 78, "(2 towers)", textAnchor="middle", fontSize=6.5, fillColor=GREY))
+# convergence arrows
+arrow(sw, 288, 138, 408, 118, color=G1, w=1.0)
+arrow(sw, 288, 92, 408, 92, color=G2, w=1.0)
+arrow(sw, 368, 46, 408, 66, color=G3, w=1.0)
+label(sw, 200, 14, "Predict + Transfer → generator tower    •    Reason → reasoner tower", 6.5, GREY)
+story.append(sw)
+caption("Figure 2a. Dashed Transfer lane = it skipped a public “2”. All three families converge into "
+        "Cosmos 3's two-tower omnimodel.")
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — per-family novelty table
+p("Same family, across versions: the novelty at each step", H2)
+fev = [
+    ["Family", "Evolution (version → novelty)", "Fate in Cosmos 3"],
+    ["Predict",
+     "1: two engines (diffusion 7/14B + autoregressive 4/12B), T5 encoder, separate tasks.  "
+     "2: diffusion-only DiT (2/14B) + sparse attention → up to 2.6× faster.  "
+     "2.5: flow-based + unified Text/Image/Video-to-World + Reason1 encoder + RL + 30s multiview.",
+     "Becomes the generator tower"],
+    ["Transfer",
+     "1: Multi-ControlNet on Predict 1; controls = depth/edge/keypoint/segmentation/LiDAR/HD-map; "
+     "4 control blocks at the START of the network; 7B.  "
+     "2.5: built on Predict 2.5; control blocks DISTRIBUTED (one every 7 blocks); 2B is 3.5× smaller "
+     "than Transfer1-7B with better alignment & less hallucination.",
+     "Folded into the generator tower (conditioning / control)"],
+    ["Reason",
+     "1: physical-AI reasoning VLM (7B/56B), hybrid Mamba-MLP-Transformer, 16K context, SFT + RL "
+     "(GRPO), long chain-of-thought.  "
+     "2: 256K context (16× longer), adds OCR + 2D/3D point localization + bounding boxes + stronger "
+     "spatial grounding; #1 open model.",
+     "Becomes the reasoner tower"],
+    ["Tokenizer",
+     "1: causal autoencoder; continuous (CV) for diffusion + discrete (DV, FSQ 64k vocab) for "
+     "autoregressive; up to 12× faster than prior tokenizers.",
+     "Reused as the visual/audio encoder family (ViT/VAE)"],
+]
+fe = []
+for i, r in enumerate(fev):
+    if i == 0:
+        fe.append([cellP(c, header=True) for c in r])
+    else:
+        fe.append([cellP(r[0], label=True), cellP(r[1]), cellP(r[2])])
+fet = Table(fe, colWidths=[2.0*cm, 11.0*cm, 4.0*cm], repeatRows=1)
+festyle = [
+    ("BACKGROUND", (0,0), (-1,0), NV_GREEN),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+    ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,1), colors.HexColor("#E8F5D5")),
+    ("BACKGROUND", (0,2), (0,2), BLUE_BG),
+    ("BACKGROUND", (0,3), (0,3), PURP_BG),
+    ("BACKGROUND", (0,4), (0,4), LIGHT_BG),
+]
+fet.setStyle(TableStyle(festyle))
+story.append(fet)
+caption("Table 1d. Read each row left→right to see one family's novelty trajectory, and the right "
+        "column for where it ends up inside Cosmos 3.")
+
+p("The one-paragraph synthesis", H3)
+p("Cosmos 1 and 2.5 are <b>full platforms</b> (Predict + Transfer + Reason + Tokenizer); Cosmos 2 "
+  "was mainly a <b>Predict</b> efficiency/quality upgrade (sparse attention); Reason ran its own "
+  "<b>1→2</b> track (long context + spatial grounding). The big architectural story of <b>Cosmos "
+  "3</b> is not a new family &mdash; it is the <b>disappearance</b> of separate families: the "
+  "generator tower absorbs Predict + Transfer, the reasoner tower absorbs Reason, and audio + action "
+  "are added on top.", BODY)
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 3 — architecture diagrams
 p("How the architecture changed (diagrams)", H2)
 
