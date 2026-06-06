@@ -19,6 +19,7 @@ from reportlab.platypus import (
 from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon, Circle
 from reportlab.graphics.charts.barcharts import VerticalBarChart, HorizontalBarChart
 from reportlab.graphics.charts.legends import Legend
+from reportlab.platypus.tableofcontents import TableOfContents
 
 # ---------------------------------------------------------------- palette
 NV_GREEN = colors.HexColor("#76B900")
@@ -59,6 +60,8 @@ CELL = ParagraphStyle("CELL", parent=BODY, fontSize=8, leading=10, spaceAfter=0)
 CELL_H = ParagraphStyle("CELL_H", parent=CELL, fontName="Helvetica-Bold",
                         textColor=colors.white, fontSize=8)
 CELL_L = ParagraphStyle("CELL_L", parent=CELL, fontName="Helvetica-Bold", fontSize=8)
+# Heading visually identical to H2 but NOT named "H2" — so it is skipped by the TOC collector
+H2NOTOC = ParagraphStyle("H2NOTOC", parent=H2)
 
 story = []
 
@@ -69,6 +72,10 @@ def spacer(h=6): story.append(Spacer(1, h))
 def rule(): story.append(HRFlowable(width="100%", thickness=0.6, color=BORDER,
                                     spaceBefore=8, spaceAfter=8))
 def caption(t): story.append(Paragraph(t, CAP))
+def cellP(t, header=False, label=False):
+    if header: return Paragraph(t.replace("\n","<br/>"), CELL_H)
+    if label:  return Paragraph(t.replace("\n","<br/>"), CELL_L)
+    return Paragraph(t.replace("\n","<br/>"), CELL)
 
 # ---------------------------------------------------------------- diagram helpers
 def box(d, x, y, w, h, lines, fill, tcolor=DARK, fs=7.5, stroke=None, bold=True):
@@ -198,6 +205,69 @@ story.append(gt)
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — table of contents
+p("Contents", H2NOTOC)
+toc = TableOfContents()
+toc.levelStyles = [ParagraphStyle(
+    "TOCH2", fontName="Helvetica", fontSize=10, leading=16,
+    leftIndent=10, firstLineIndent=-10, textColor=DARK)]
+story.append(toc)
+
+story.append(PageBreak())
+
+# ================================================================ PAGE — cheat sheet
+p("One-page cheat-sheet", H2NOTOC)
+
+p("The four generations (the arc)", H3)
+bullets([
+    "<b>Cosmos 1 — Toolbox:</b> two engines (diffusion + autoregressive), T5 text, separate tasks.",
+    "<b>Cosmos 2 — Polish:</b> diffusion-only + sparse attention (up to 2.6× faster).",
+    "<b>Cosmos 2.5 — Unify:</b> one flow model, Reason1 encoder, RL, 30s multi-camera.",
+    "<b>Cosmos 3 — Leap:</b> two-tower mixture-of-transformers omnimodel; +audio +action.",
+])
+
+p("The platform: families (not one model)", H3)
+cs1 = [
+    ["Family", "Job", "Technique"],
+    ["Predict", "generate the future world", "diffusion + autoregressive (1) → flow (2.5)"],
+    ["Transfer", "controllable sim→real", "diffusion DiT + ControlNet"],
+    ["Reason", "understand & decide", "autoregressive-text VLM (+ SFT/RL)"],
+    ["Tokenizer", "compress video ↔ tokens", "autoencoder (continuous + discrete)"],
+]
+cst = Table([[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(cs1)],
+            colWidths=[2.4*cm, 5.0*cm, 9.6*cm])
+cst.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (-1,0), NV_GREEN),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), LIGHT_BG),
+]))
+story.append(cst)
+
+p("Jargon in one line each", H3)
+bullets([
+    "<b>Diffusion</b> = sculptor: refine noise → video over many steps (top quality, slower).",
+    "<b>Autoregressive</b> = writer: predict the next token (fast; over video tokens in Predict, over text tokens in Reason).",
+    "<b>Flow matching</b> = a near-straight noise→data path → far fewer steps.",
+    "<b>Sparse attention (NATTEN)</b> = each patch attends only to nearby patches → up to 2.6× faster.",
+    "<b>Mixture-of-Transformers</b> = each modality/tower has its own weights but shares global attention.",
+    "<b>SFT</b> = teach with curated Q→A; <b>GRPO</b> = RL that rewards better-than-average tries.",
+])
+
+p("Numbers worth remembering", H3)
+bullets([
+    "<b>Predict 1:</b> diffusion 7B/14B, autoregressive 4B/12B; ~100M clips from 20M hours; ~10k H100s.",
+    "<b>Predict 2.5:</b> 2B/14B; 200M clips; PAI-Bench 0.810; up to 30s, multi-camera.",
+    "<b>Reason:</b> 1 = 7B/56B, 16K context; 2 = 2B/8B, 256K context, OCR + 2D/3D.",
+    "<b>Cosmos 3:</b> Nano 16B (8B+8B), Super 64B (32B+32B); ~20T training tokens (press-reported).",
+])
+story.append(Paragraph(
+    "One sentence: Cosmos went from “many tools that dream video” → “the best tool, polished” → "
+    "“one smart unified tool” → “a reasoning, seeing, hearing, acting omnimodel.”", ANALOGY))
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 2 — master table
 p("The big picture: all four generations side by side", H2)
 header = ["", "Cosmos 1", "Cosmos 2", "Cosmos 2.5", "Cosmos 3"]
@@ -212,10 +282,6 @@ rows = [
     ["Post-training", "Video2World\nfine-tune", "Action-conditioned\nfine-tune", "Model merge + RL", "SFT + RL (GRPO-style)"],
     ["One-word vibe", "Kitchen sink", "Polish", "Unify", "Leap"],
 ]
-def cellP(t, header=False, label=False):
-    if header: return Paragraph(t.replace("\n","<br/>"), CELL_H)
-    if label:  return Paragraph(t.replace("\n","<br/>"), CELL_L)
-    return Paragraph(t.replace("\n","<br/>"), CELL)
 tdata = [[cellP(h, header=True) for h in header]]
 for r in rows:
     tdata.append([cellP(r[0], label=True)] + [cellP(c) for c in r[1:]])
@@ -273,7 +339,7 @@ pm.add(Rect(0, 8, 482, 28, fillColor=ORNG_BG, strokeColor=G4, strokeWidth=0.9, r
 label(pm, 241, 24, "Cosmos 3 MERGES all three pillars into ONE omnimodel", 8, DARK, bold=True)
 label(pm, 241, 14, "(reasoner tower = Reason; generator tower = Predict + Transfer; + audio & action)", 6.2, GREY)
 story.append(pm)
-caption("Platform map. Three pillars (Predict / Transfer / Reason) sit on shared tools. They "
+caption("Figure 1. Three pillars (Predict / Transfer / Reason) sit on shared tools. They "
         "interconnect — and by Cosmos 3 they fuse into a single model.")
 
 p("The model families at a glance", H3)
@@ -308,7 +374,7 @@ for i in [4,6]:
     ftstyle.append(("BACKGROUND", (1,i), (-1,i), ROW_ALT))
 ft.setStyle(TableStyle(ftstyle))
 story.append(ft)
-caption("Table 1a. Predict, Transfer and Reason are different MODELS for different jobs — not "
+caption("Table 2. Predict, Transfer and Reason are different MODELS for different jobs — not "
         "versions of one another. Generations 1/2/2.5 ship them separately; Cosmos 3 unifies them.")
 
 story.append(PageBreak())
@@ -340,7 +406,7 @@ vt.setStyle(TableStyle([
     ("BACKGROUND", (1,6), (-1,6), ROW_ALT),
 ]))
 story.append(vt)
-caption("Table 1b. One family, one generation ≈ a dozen checkpoints. Multiply by Transfer + Reason "
+caption("Table 3. One family, one generation ≈ a dozen checkpoints. Multiply by Transfer + Reason "
         "+ tools to see why “Cosmos 1” is a platform, not a model.")
 
 p("How the families work together", H3)
@@ -388,7 +454,7 @@ dvstyle = [
 ]
 dvt.setStyle(TableStyle(dvstyle))
 story.append(dvt)
-caption("Table 1c. Cosmos 2 was a Predict upgrade; 2.5 restored the full platform; Cosmos 3's "
+caption("Table 4. Cosmos 2 was a Predict upgrade; 2.5 restored the full platform; Cosmos 3's "
         "novelty is that it STOPS being a platform of separate models and fuses them.")
 
 # --- swimlane diagram
@@ -428,7 +494,7 @@ arrow(sw, 288, 92, 408, 92, color=G2, w=1.0)
 arrow(sw, 368, 46, 408, 66, color=G3, w=1.0)
 label(sw, 200, 14, "Predict + Transfer → generator tower    •    Reason → reasoner tower", 6.5, GREY)
 story.append(sw)
-caption("Figure 2a. Dashed Transfer lane = it skipped a public “2”. All three families converge into "
+caption("Figure 2. Dashed Transfer lane = it skipped a public “2”. All three families converge into "
         "Cosmos 3's two-tower omnimodel.")
 
 story.append(PageBreak())
@@ -478,7 +544,7 @@ festyle = [
 ]
 fet.setStyle(TableStyle(festyle))
 story.append(fet)
-caption("Table 1d. Read each row left→right to see one family's novelty trajectory, and the right "
+caption("Table 5. Read each row left→right to see one family's novelty trajectory, and the right "
         "column for where it ends up inside Cosmos 3.")
 
 p("The one-paragraph synthesis", H3)
@@ -514,7 +580,7 @@ box(d1, 410, 60, 70, 34, ["Output", "video"], colors.HexColor("#E8F5D5"), stroke
 label(d1, 230, 138, "high quality, slower", 6.5, G1)
 label(d1, 230, 18, "fast / real-time, rougher", 6.5, G4)
 story.append(d1)
-caption("Figure 1. Cosmos 1 shipped two separate engines. Diffusion (top) = best quality; "
+caption("Figure 3. Cosmos 1 shipped two separate engines. Diffusion (top) = best quality; "
         "autoregressive (bottom) = fast, but needs a diffusion decoder to clean up its output. "
         "Text enters both via a T5-XXL encoder (not shown).")
 
@@ -529,7 +595,7 @@ box(d3, 250, 36, 130, 44, ["UNIFIED FLOW MODEL", "2B / 14B", "(replaces 3 old mo
 arrow(d3, 380, 57, 410, 57)
 box(d3, 410, 40, 72, 34, ["30s video", "multi-cam"], colors.HexColor("#EFE0F6"), stroke=G3)
 story.append(d3)
-caption("Figure 2. Cosmos 2.5 merged the three separate task-models of earlier versions into a "
+caption("Figure 4. Cosmos 2.5 merged the three separate task-models of earlier versions into a "
         "single flow-based model, and upgraded the text encoder to Cosmos-Reason1 &mdash; a model "
         "that actually understands physics and language.")
 
@@ -545,7 +611,7 @@ arrow(d4, 390, 70, 415, 70)
 box(d4, 415, 48, 67, 44, ["Video +", "actions +", "audio"], colors.HexColor("#FBE3CC"), stroke=G4, fs=7)
 label(d4, 240, 30, "one model: reason  →  generate  →  act", 7.5, GREY, bold=True)
 story.append(d4)
-caption("Figure 3. Cosmos 3 is no longer just a video predictor. A reasoning transformer first "
+caption("Figure 5. Cosmos 3 is no longer just a video predictor. A reasoning transformer first "
         "understands the scene, then an expert generation transformer produces video AND physical "
         "actions (and audio) &mdash; all in one “omnimodel”.")
 
@@ -590,7 +656,7 @@ for i in range(1, len(tp)):
     if i % 2 == 0: tpstyle.append(("BACKGROUND", (1,i), (-1,i), ROW_ALT))
 tpt.setStyle(TableStyle(tpstyle))
 story.append(tpt)
-caption("Table 2a. The two engines use different tokenizers, different losses, and different "
+caption("Table 6. The two engines use different tokenizers, different losses, and different "
         "training stages — they are genuinely different models, not one model trained twice.")
 
 p("So why keep both?", H3)
@@ -623,7 +689,7 @@ tt.setStyle(TableStyle([
     ("BACKGROUND", (0,4), (0,4), LIGHT_BG),
 ]))
 story.append(tt)
-caption("Table 2c. Only Predict has the two-engine split. Note “autoregressive” means different "
+caption("Table 7. Only Predict has the two-engine split. Note “autoregressive” means different "
         "things: Predict predicts the next discrete VIDEO token (future frames); Reason is a normal "
         "LLM/VLM predicting the next TEXT token. In Cosmos 3 these become the two towers — generator "
         "(diffusion, Predict+Transfer) and reasoner (autoregressive-text, Reason).")
@@ -668,7 +734,7 @@ prstyle = [
 ]
 prt.setStyle(TableStyle(prstyle))
 story.append(prt)
-caption("Table 2b. Read the rightmost column: every jump is a genuine idea, not a scale-up. "
+caption("Table 8. Read the rightmost column: every jump is a genuine idea, not a scale-up. "
         "1→2 buys speed; 2→2.5 buys understanding + simplicity; 2.5→3 buys a whole new capability.")
 
 p("The one-sentence “why”", H3)
@@ -692,7 +758,7 @@ cats = ["Nature dynamics", "Manipulation", "Navigation", "Driving", "Human motio
         "First-person POV", "Camera movement", "Synthetic render", "Other"]
 vals = [20, 16, 16, 11, 10, 8, 8, 4, 7]
 story.append(hbar(vals, cats, G1, w=482, h=185, vmax=22))
-caption("Figure 4. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
+caption("Figure 6. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
         "but driving, human motion and synthetic data are all represented. This breadth is what lets "
         "one pretrained model be fine-tuned for many downstream robots/vehicles.")
 
@@ -714,7 +780,7 @@ dt.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(dt)
-caption("Table 2. The jump from “100M clips” to “20T tokens” reflects Cosmos 3 also ingesting "
+caption("Table 9. The jump from “100M clips” to “20T tokens” reflects Cosmos 3 also ingesting "
         "text, audio and robot/human action data &mdash; not just video. "
         "<b>Caveat:</b> Cosmos 3's exact counts (20T tokens, ~1B images, ~400M videos) come from "
         "press coverage; NVIDIA's official release states only “billions of samples across text, "
@@ -811,7 +877,7 @@ for i in span_rows:
     hstyle.append(("SPAN", (1,i), (2,i)))
 ht.setStyle(TableStyle(hstyle))
 story.append(ht)
-caption("Table 3. NVIDIA published far more hyperparameters for Cosmos 1 than for the closed-er "
+caption("Table 10. NVIDIA published far more hyperparameters for Cosmos 1 than for the closed-er "
         "later releases; 2.5 and 3 reuse the same design DNA (3D-RoPE positions, AdaLN-LoRA, a "
         "causal tokenizer) at larger scale.")
 
@@ -843,7 +909,7 @@ iot.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(iot)
-caption("Table 4. The input distribution broadens from “text + frames” (Cosmos 1) to a full "
+caption("Table 11. The input distribution broadens from “text + frames” (Cosmos 1) to a full "
         "five-modality stream including audio and actions (Cosmos 3). The output likewise grows from "
         "“a short video” to “video + the physical actions a robot should take”.")
 
@@ -883,7 +949,7 @@ spt.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(spt)
-caption("Table 5. Two concrete, comparable speedups are published: Cosmos 1's tokenizer (up to "
+caption("Table 12. Two concrete, comparable speedups are published: Cosmos 1's tokenizer (up to "
         "12×) and Cosmos 2's sparse attention (up to 2.6×). 2.5 and 3 emphasise efficiency "
         "via flow sampling and a sub-second Nano tier rather than a single headline multiplier.")
 
@@ -893,7 +959,7 @@ story.append(vbar(
     cats=["Cosmos 1\ntokenizer", "Cosmos 2\nsparse attn"],
     series_colors=[NV_GREEN], series_names=None,
     w=300, h=160, vmin=0, vmax=14, step=2, ylabel="speedup (×)", barlabels=True))
-caption("Figure 5. The two directly-quoted “× speedup” numbers. (Different things are being "
+caption("Figure 7. The two directly-quoted “× speedup” numbers. (Different things are being "
         "sped up &mdash; tokenizer vs. whole pipeline &mdash; so this compares <i>magnitude of "
         "improvement</i>, not absolute latency.)")
 
@@ -968,7 +1034,7 @@ attn_grid(dia, 300, 35, neighborhood=True)
 label(dia, 338, 18, "NEIGHBOURHOOD (sparse) attention", 8, DARK, bold=True)
 label(dia, 338, 6, "1 patch → only nearby patches (cheap)", 7, GREY)
 story.append(dia)
-caption("Figure 5a. Left: every patch attends to all others (lines everywhere). Right: each patch "
+caption("Figure 8. Left: every patch attends to all others (lines everywhere). Right: each patch "
         "attends only to its local window — the grey patches are skipped. Cosmos 2 (via the NATTEN "
         "library) drops up to 98% of the connections, keeping only the ~2% that matter.")
 
@@ -1053,7 +1119,7 @@ label(dia, x0, yb+24, "noise", 7, GREY)
 label(dia, x1+4, yb+16, "video", 7, GREY)
 label(dia, 240, yb-22, "FLOW MATCHING (Cosmos 2.5): near-straight path, FEW big steps", 8, DARK, bold=True)
 story.append(dia)
-caption("Figure 5b. Same start (noise) and destination (video). Diffusion zig-zags there in many "
+caption("Figure 9. Same start (noise) and destination (video). Diffusion zig-zags there in many "
         "small steps; flow matching learns a near-straight route it can cover in a few big steps.")
 
 p("Why Cosmos 2.5 switched to it", H3)
@@ -1095,7 +1161,7 @@ arrow(fd, 366, 74, 382, 74)
 box(fd, 382, 42, 100, 64, ["OUTPUTS", "Text · Video", "Audio · Action", "(synchronised)"], colors.white, fs=7)
 label(fd, 235, 8, "one token sequence, aligned on a shared time axis by 3D mRoPE", 6.2, GREY)
 story.append(fd)
-caption("Figure 5c. Each modality is encoded into a shared space, concatenated into one sequence, and "
+caption("Figure 10. Each modality is encoded into a shared space, concatenated into one sequence, and "
         "processed by a two-tower Mixture-of-Transformers: separate weights per modality/tower, but "
         "one global attention so audio, video, text and action all “see” each other.")
 
@@ -1172,7 +1238,7 @@ for i, (lines, fill, stroke) in enumerate(stages):
 label(dp, 110, 18, "general knowledge", 6.5, GREY)
 label(dp, 360, 18, "sharpened physical reasoning", 6.5, GREY)
 story.append(dp)
-caption("Figure 6. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
+caption("Figure 11. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
         "then reinforcement learning to make the reasoning reliable (stage 4).")
 
 p("What happens in SFT (stage 3)", H3)
@@ -1206,7 +1272,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#A9CCE3"), G3],
     series_names=["Cosmos-Reason1 7B", "Cosmos-Reason1 56B"],
     w=320, h=170, vmin=0, vmax=80, step=20, ylabel="benchmark score (%)"))
-caption("Figure 7. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
+caption("Figure 12. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
         "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model. "
         "<b>Source note:</b> numbers are from NVIDIA's Cosmos-Reason1 research page (released 7B "
         "checkpoint). An earlier arXiv v1 of the paper reported an <i>8B</i> model with somewhat "
@@ -1219,7 +1285,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#F5CBA7"), G4],
     series_names=["Before RL (SFT only)", "After Physical-AI RL"],
     w=320, h=170, vmin=0, vmax=100, step=20, ylabel="score (%)"))
-caption("Figure 8. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
+caption("Figure 13. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
         "(combined reasoning) and +7.0 points (intuitive physics) — evidence that post-training, "
         "not just size, drives physical reasoning. <b>Source note:</b> research-page figures; arXiv "
         "v1 reports different magnitudes (e.g. intuitive physics 65.7&rarr;68.7). The <i>direction</i> "
@@ -1261,7 +1327,7 @@ audit = [
     ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
      "NVIDIA research page", "OK"],
     ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
-    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 7–8 scores",
+    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 12–13 scores",
      "Research page vs arXiv v1", "CAVEAT — see below"],
     ["12", "Cosmos 3: mixture-of-transformers omnimodel; Super/Nano/Edge; #1 on open leaderboards",
      "NVIDIA newsroom (Jun 2026)", "OK"],
@@ -1308,13 +1374,13 @@ for i in range(1, len(ad)):
         astyle.append(("BACKGROUND", (0,i), (2,i), ROW_ALT))
 at.setStyle(TableStyle(astyle))
 story.append(at)
-caption("Table 6. Claims audit. Green = verified against a primary source; amber = caveat.")
+caption("Table 13. Claims audit. Green = verified against a primary source; amber = caveat.")
 
 spacer(4)
 p("The two caveats, in detail", H3)
 bullets([
     "<b>! Cosmos-Reason1 size & scores (claim 11):</b> NVIDIA's research page describes a "
-    "released <b>7B</b> model with the scores plotted in Figures 7–8. The <b>arXiv v1</b> of the "
+    "released <b>7B</b> model with the scores plotted in Figures 12–13. The <b>arXiv v1</b> of the "
     "paper instead describes an <b>8B</b> model and reports different numbers (e.g. physical "
     "common sense 52.3% vs 54.3%; intuitive-physics RL gain 65.7&rarr;68.7 vs 74.5&rarr;81.5). "
     "This is a paper-revision difference. This guide uses the <b>research-page (7B)</b> figures "
@@ -1431,11 +1497,26 @@ def footer(canvas, doc):
     canvas.restoreState()
 
 
-doc = SimpleDocTemplate(
+class CosmosDoc(SimpleDocTemplate):
+    """Collects H2 headings into the Table of Contents and adds PDF bookmarks."""
+    _toc_n = 0
+    def beforeDocument(self):
+        self._toc_n = 0          # reset each multiBuild pass so bookmark keys stay stable
+    def afterFlowable(self, flowable):
+        if isinstance(flowable, Paragraph) and flowable.style.name == "H2":
+            text = flowable.getPlainText()
+            key = "h2-%d" % self._toc_n
+            self._toc_n += 1
+            self.canv.bookmarkPage(key)
+            self.canv.addOutlineEntry(text, key, level=0, closed=False)
+            self.notify("TOCEntry", (0, text, self.page, key))
+
+
+doc = CosmosDoc(
     "/home/user/transformers/cosmos_guide.pdf", pagesize=A4,
     leftMargin=2*cm, rightMargin=2*cm, topMargin=1.8*cm, bottomMargin=1.8*cm,
     title="NVIDIA Cosmos - Detailed Beginner's Guide",
     author="Cosmos research summary",
 )
-doc.build(story, onFirstPage=footer, onLaterPages=footer)
+doc.multiBuild(story, onFirstPage=footer, onLaterPages=footer)
 print("PDF written.")
