@@ -1212,6 +1212,61 @@ bullets([
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — staged vs joint
+p("Does Cosmos 3 reason THEN predict, or do it all at once?", H2)
+p("A common question: are reasoning and generation two separate steps? <b>No &mdash; they happen "
+  "jointly in one forward pass.</b> This is the key difference from the old platform, where Reason "
+  "and Predict were literally <b>two separate models run in sequence</b>.", BODY)
+
+# --- diagram: old staged pipeline vs new joint pass
+jd = Drawing(482, 150)
+# OLD (top)
+label(jd, 0, 132, "OLD (Cosmos 1 / 2.5): two separate models, staged", 8, GREY, anchor="start", bold=True)
+box(jd, 0, 95, 95, 30, ["Reason model", "(understand)"], PURP_BG, stroke=G3, fs=7)
+arrow(jd, 95, 110, 135, 110)
+label(jd, 115, 114, "text only", 6, GREY)
+box(jd, 135, 95, 95, 30, ["Predict model", "(generate)"], colors.HexColor("#E8F5D5"), stroke=G1, fs=7)
+arrow(jd, 230, 110, 268, 110)
+box(jd, 268, 95, 70, 30, ["video"], colors.white, fs=7)
+label(jd, 175, 86, "generator only sees the reasoner's TEXT output", 6, GREY)
+# NEW (bottom)
+label(jd, 0, 66, "COSMOS 3: ONE model, ONE forward pass (joint attention)", 8, DARK, anchor="start", bold=True)
+jd.add(Rect(0, 12, 338, 46, fillColor=ORNG_BG, strokeColor=G4, strokeWidth=1.0, rx=5, ry=5))
+box(jd, 12, 30, 150, 22, ["Reasoner tokens (AR) — understand"], colors.white, stroke=G3, fs=6.5)
+box(jd, 12, 16, 150, 12, ["Generator tokens (DM) — create"], colors.white, stroke=G1, fs=6)
+# joint attention double arrow
+arrow(jd, 175, 40, 175, 30, color=G4, w=1.0); arrow(jd, 175, 24, 175, 34, color=G4, w=1.0)
+label(jd, 230, 40, "joint attention", 6.5, G4, bold=True)
+label(jd, 230, 30, "every layer", 6, GREY)
+arrow(jd, 338, 35, 376, 35)
+box(jd, 376, 20, 96, 30, ["video + action", "+ audio"], colors.white, fs=7)
+story.append(jd)
+caption("Figure 11. Old = a pipeline of two models; the generator only received the reasoner's text. "
+        "Cosmos 3 = one model where reasoning and generation tokens share attention at every layer.")
+
+p("The precise picture", H3)
+bullets([
+    "<b>One unified forward pass:</b> NVIDIA states Cosmos 3 “can reason and generate … in one "
+    "unified forward pass” &mdash; not a two-model pipeline.",
+    "<b>Separate weights, joint attention:</b> the two towers have their own parameters (the "
+    "Mixture-of-Transformers trick) but “interact through joint attention” at every layer &mdash; so "
+    "they are <b>coupled, not deferred</b> to separate stages.",
+    "<b>“Reasons before generating” is an INFORMATION order, not a separate model call:</b> the "
+    "reasoning tokens sit earlier in the sequence and the generation tokens attend back to them, so "
+    "reasoning <b>conditions</b> generation within the same pass. (Typically causal attention over "
+    "the reasoning tokens + bidirectional within the diffusion block &mdash; the standard pattern for "
+    "hybrid AR+diffusion models; NVIDIA hasn't published the exact masking for Cosmos 3.)",
+    "<b>The one staged case:</b> the reasoner <b>can run alone</b> as a pure VLM (understanding "
+    "only). But whenever it generates, <b>both towers run together</b>.",
+])
+p("<b>Why joint beats staged:</b> in the old pipeline the generator only saw the reasoner's text "
+  "summary; in Cosmos 3 it can attend to the reasoner's <b>full internal representations</b>, and "
+  "reasoning can be informed by what is being generated &mdash; tighter coupling means fewer "
+  "hallucinations, better physical consistency, and one efficient pass instead of two model "
+  "invocations.", BODY)
+
+story.append(PageBreak())
+
 # ================================================================ PAGE 8 — pretraining + post-training
 p("Pretraining and post-training: SFT and GRPO", H2)
 p("Modern Cosmos models are built in two phases. <b>Pretraining</b> soaks up broad knowledge from "
@@ -1238,7 +1293,7 @@ for i, (lines, fill, stroke) in enumerate(stages):
 label(dp, 110, 18, "general knowledge", 6.5, GREY)
 label(dp, 360, 18, "sharpened physical reasoning", 6.5, GREY)
 story.append(dp)
-caption("Figure 11. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
+caption("Figure 12. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
         "then reinforcement learning to make the reasoning reliable (stage 4).")
 
 p("What happens in SFT (stage 3)", H3)
@@ -1272,7 +1327,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#A9CCE3"), G3],
     series_names=["Cosmos-Reason1 7B", "Cosmos-Reason1 56B"],
     w=320, h=170, vmin=0, vmax=80, step=20, ylabel="benchmark score (%)"))
-caption("Figure 12. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
+caption("Figure 13. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
         "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model. "
         "<b>Source note:</b> numbers are from NVIDIA's Cosmos-Reason1 research page (released 7B "
         "checkpoint). An earlier arXiv v1 of the paper reported an <i>8B</i> model with somewhat "
@@ -1285,7 +1340,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#F5CBA7"), G4],
     series_names=["Before RL (SFT only)", "After Physical-AI RL"],
     w=320, h=170, vmin=0, vmax=100, step=20, ylabel="score (%)"))
-caption("Figure 13. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
+caption("Figure 14. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
         "(combined reasoning) and +7.0 points (intuitive physics) — evidence that post-training, "
         "not just size, drives physical reasoning. <b>Source note:</b> research-page figures; arXiv "
         "v1 reports different magnitudes (e.g. intuitive physics 65.7&rarr;68.7). The <i>direction</i> "
@@ -1309,8 +1364,8 @@ story.append(PageBreak())
 # ================================================================ PAGE — verification / fact-check
 p("Verification & source audit", H2)
 p("Every quantitative claim in this guide was cross-checked against primary sources "
-  "(NVIDIA papers, research pages, and the official Cosmos 3 release). Of 20 checked claims, "
-  "<b>18 verified</b> against a primary/official source; <b>2 carry caveats</b> (marked “!”). "
+  "(NVIDIA papers, research pages, and the official Cosmos 3 release). Of 21 checked claims, "
+  "<b>19 verified</b> against a primary/official source; <b>2 carry caveats</b> (marked “!”). "
   "No factual errors were found in any claim that could be checked against a primary source.", BODY)
 
 audit = [
@@ -1327,7 +1382,7 @@ audit = [
     ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
      "NVIDIA research page", "OK"],
     ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
-    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 12–13 scores",
+    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 13–14 scores",
      "Research page vs arXiv v1", "CAVEAT — see below"],
     ["12", "Cosmos 3: mixture-of-transformers omnimodel; Super/Nano/Edge; #1 on open leaderboards",
      "NVIDIA newsroom (Jun 2026)", "OK"],
@@ -1347,6 +1402,9 @@ audit = [
      "NVIDIA/HF Reason 2 blog", "OK — exact"],
     ["20", "Cosmos 3 = two-tower MoT (Nano 16B = 8+8, Super 64B = 32+32); ViT/VAE encoders; 3D mRoPE",
      "NVIDIA/HF Cosmos 3 blog", "OK"],
+    ["21", "Cosmos 3 reasons + generates in ONE unified forward pass; separate weights, joint "
+     "attention (vs the old 2-model pipeline). Causal/bidirectional masking is the typical pattern, "
+     "not NVIDIA-confirmed.", "NVIDIA/HF + dev blog", "OK (masking inferred)"],
 ]
 ad = []
 for i, r in enumerate(audit):
@@ -1380,7 +1438,7 @@ spacer(4)
 p("The two caveats, in detail", H3)
 bullets([
     "<b>! Cosmos-Reason1 size & scores (claim 11):</b> NVIDIA's research page describes a "
-    "released <b>7B</b> model with the scores plotted in Figures 12–13. The <b>arXiv v1</b> of the "
+    "released <b>7B</b> model with the scores plotted in Figures 13–14. The <b>arXiv v1</b> of the "
     "paper instead describes an <b>8B</b> model and reports different numbers (e.g. physical "
     "common sense 52.3% vs 54.3%; intuitive-physics RL gain 65.7&rarr;68.7 vs 74.5&rarr;81.5). "
     "This is a paper-revision difference. This guide uses the <b>research-page (7B)</b> figures "
