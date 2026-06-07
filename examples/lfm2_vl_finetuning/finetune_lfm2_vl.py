@@ -201,9 +201,10 @@ def _normalize_hub_record(example):
         question, answer = "", ""
         for msg in example["messages"]:
             content = msg["content"]
-            # content may be a plain string or a list of typed parts
+            # content may be a plain string or a list of typed parts. Image parts
+            # often carry a ``text`` key explicitly set to ``None``, so guard with ``or ""``.
             if isinstance(content, list):
-                text = " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+                text = " ".join((part.get("text") or "") for part in content if isinstance(part, dict))
             else:
                 text = content
             text = text.replace("<image>", "").strip()
