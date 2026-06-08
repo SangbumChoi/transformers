@@ -770,6 +770,76 @@ p("The physical world is <b>causal</b> &mdash; the future follows from the past,
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — bidirectional vs causal
+p("Easy explainer: “bidirectional” vs “causal next-token”", H2)
+p("These two words are the heart of the difference, so here they are in plain language. It all comes "
+  "down to one thing: <b>which other tokens is a token allowed to “look at”?</b> (A token = a small "
+  "chunk of the video — a patch, or a moment in time; “attention” = each token looking at others to "
+  "decide what it should be.)", BODY)
+
+# --- diagram: bidirectional vs causal attention
+bd = Drawing(482, 130)
+def tok(d, x, y, on=False, dim=False):
+    fill = G1 if on else (colors.HexColor("#EEEEEE") if dim else colors.white)
+    d.add(Circle(x, y, 9, fillColor=fill, strokeColor=DARK, strokeWidth=0.7))
+# Bidirectional (left)
+label(bd, 0, 116, "BIDIRECTIONAL (diffusion) — look BOTH ways", 8, DARK, anchor="start", bold=True)
+xsL = [25, 60, 95, 130, 165, 200]; yL = 80; ctr = 95
+for x in xsL: tok(bd, x, yL, on=(x==ctr))
+# attention links from the centre token to every other token (both directions)
+for x in xsL:
+    if x != ctr:
+        bd.add(Line(ctr, yL+10, x, yL+10, strokeColor=G1, strokeWidth=0.6))
+label(bd, 112, 60, "the middle token sees ALL others (past + future)", 6.3, GREY)
+label(bd, 112, 50, "like fill-in-the-blank: read before AND after", 6.3, GREY)
+# Causal (right)
+label(bd, 262, 116, "CAUSAL next-token (autoregressive) — look only BACK", 8, DARK, anchor="start", bold=True)
+xsR = [285, 315, 345, 375, 405, 435]; yR = 80; cidx = 3  # predicting token at index 3 (0-based -> the 4th)
+cx = xsR[cidx]
+for i, x in enumerate(xsR):
+    tok(bd, x, yR, on=(i==cidx), dim=(i>cidx))
+for i, x in enumerate(xsR):
+    if i < cidx:
+        bd.add(Line(cx, yR+10, x, yR+10, strokeColor=G4, strokeWidth=0.6))
+# next-token arrow: predict the NEXT token from the current one
+arrow(bd, xsR[cidx]-2, yR-14, xsR[cidx+1]+2, yR-14, color=G4, w=1.0)
+label(bd, 360, 58, "sees only PAST tokens, then predicts the NEXT one", 6.3, GREY)
+label(bd, 360, 48, "grey = future (hidden); like autocomplete / time", 6.3, GREY)
+story.append(bd)
+caption("Figure 7. Left: in diffusion the whole clip exists at once, so a token attends to every "
+        "other token (before and after). Right: autoregressive builds left-to-right, so a token may "
+        "attend only to the past and then predicts the next token; the future is hidden.")
+
+p("Bidirectional (diffusion) — “look both ways”", H3)
+p("When diffusion generates, the <b>whole clip is present from the start</b> (just noisy at first), "
+  "so every token can look <b>both directions</b> — before AND after it. It is like a "
+  "<b>fill-in-the-blank</b>: to guess a missing word you read the words on both sides. Because all "
+  "tokens are refined together, each one always has the <b>full surrounding context</b> &mdash; which "
+  "gives strong <b>global consistency</b> (the start and end of the clip “agree” because they saw "
+  "each other).", BODY)
+
+p("Causal next-token (autoregressive) — “look back, guess the next”", H3)
+p("Autoregressive generates <b>one token at a time, in order</b>, like typing. When predicting token "
+  "#5, tokens #6, #7… <b>don't exist yet</b>, so it can only look <b>backward</b> and guess #5, then "
+  "append it and guess #6, and so on. <b>“Causal”</b> = cause-before-effect: the future is built "
+  "<b>from</b> the past, never peeking ahead &mdash; exactly like <b>time</b>. (In training a "
+  "<b>causal mask</b> hides the future; diffusion uses no mask &mdash; full attention.)", BODY)
+
+p("The trade-off in everyday terms", H3)
+bullets([
+    "<b>Bidirectional</b> sees everything → great coherence, but must produce the <b>whole "
+    "fixed-length block at once</b>; there is no natural “next”, so it can't easily stream or continue.",
+    "<b>Causal</b> sees only the past → it can <b>keep going forever</b> (stream / extend), matches "
+    "real time and step-by-step robot action, and is fast with caching &mdash; but since each guess "
+    "can't use future context, small mistakes can <b>snowball (“drift”)</b> over long videos.",
+])
+story.append(Paragraph(
+    "One line: bidirectional = “fill in the whole picture using all surrounding context at once”; "
+    "causal next-token = “write the future one step at a time, using only what already happened.”",
+    ANALOGY))
+
+story.append(PageBreak())
+
 # ================================================================ PAGE — why each generation
 p("Why each new generation? (the problem it solved)", H2)
 p("A fair question: was each new version just a <b>bigger model on more data</b>? <b>No.</b> Scale "
@@ -832,7 +902,7 @@ cats = ["Nature dynamics", "Manipulation", "Navigation", "Driving", "Human motio
         "First-person POV", "Camera movement", "Synthetic render", "Other"]
 vals = [20, 16, 16, 11, 10, 8, 8, 4, 7]
 story.append(hbar(vals, cats, G1, w=482, h=185, vmax=22))
-caption("Figure 7. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
+caption("Figure 8. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
         "but driving, human motion and synthetic data are all represented. This breadth is what lets "
         "one pretrained model be fine-tuned for many downstream robots/vehicles.")
 
@@ -1037,7 +1107,7 @@ story.append(vbar(
     cats=["Cosmos 1\ntokenizer", "Cosmos 2\nsparse attn"],
     series_colors=[NV_GREEN], series_names=None,
     w=300, h=160, vmin=0, vmax=14, step=2, ylabel="speedup (×)", barlabels=True))
-caption("Figure 8. The two directly-quoted “× speedup” numbers. (Different things are being "
+caption("Figure 9. The two directly-quoted “× speedup” numbers. (Different things are being "
         "sped up &mdash; tokenizer vs. whole pipeline &mdash; so this compares <i>magnitude of "
         "improvement</i>, not absolute latency.)")
 
@@ -1112,7 +1182,7 @@ attn_grid(dia, 300, 35, neighborhood=True)
 label(dia, 338, 18, "NEIGHBOURHOOD (sparse) attention", 8, DARK, bold=True)
 label(dia, 338, 6, "1 patch → only nearby patches (cheap)", 7, GREY)
 story.append(dia)
-caption("Figure 9. Left: every patch attends to all others (lines everywhere). Right: each patch "
+caption("Figure 10. Left: every patch attends to all others (lines everywhere). Right: each patch "
         "attends only to its local window — the grey patches are skipped. Cosmos 2 (via the NATTEN "
         "library) drops up to 98% of the connections, keeping only the ~2% that matter.")
 
@@ -1197,7 +1267,7 @@ label(dia, x0, yb+24, "noise", 7, GREY)
 label(dia, x1+4, yb+16, "video", 7, GREY)
 label(dia, 240, yb-22, "FLOW MATCHING (Cosmos 2.5): near-straight path, FEW big steps", 8, DARK, bold=True)
 story.append(dia)
-caption("Figure 10. Same start (noise) and destination (video). Diffusion zig-zags there in many "
+caption("Figure 11. Same start (noise) and destination (video). Diffusion zig-zags there in many "
         "small steps; flow matching learns a near-straight route it can cover in a few big steps.")
 
 p("Why Cosmos 2.5 switched to it", H3)
@@ -1239,7 +1309,7 @@ arrow(fd, 366, 74, 382, 74)
 box(fd, 382, 42, 100, 64, ["OUTPUTS", "Text · Video", "Audio · Action", "(synchronised)"], colors.white, fs=7)
 label(fd, 235, 8, "one token sequence, aligned on a shared time axis by 3D mRoPE", 6.2, GREY)
 story.append(fd)
-caption("Figure 11. Each modality is encoded into a shared space, concatenated into one sequence, and "
+caption("Figure 12. Each modality is encoded into a shared space, concatenated into one sequence, and "
         "processed by a two-tower Mixture-of-Transformers: separate weights per modality/tower, but "
         "one global attention so audio, video, text and action all “see” each other.")
 
@@ -1319,7 +1389,7 @@ label(jd, 230, 30, "every layer", 6, GREY)
 arrow(jd, 338, 35, 376, 35)
 box(jd, 376, 20, 96, 30, ["video + action", "+ audio"], colors.white, fs=7)
 story.append(jd)
-caption("Figure 12. Old = a pipeline of two models; the generator only received the reasoner's text. "
+caption("Figure 13. Old = a pipeline of two models; the generator only received the reasoner's text. "
         "Cosmos 3 = one model where reasoning and generation tokens share attention at every layer.")
 
 p("The precise picture", H3)
@@ -1371,7 +1441,7 @@ for i, (lines, fill, stroke) in enumerate(stages):
 label(dp, 110, 18, "general knowledge", 6.5, GREY)
 label(dp, 360, 18, "sharpened physical reasoning", 6.5, GREY)
 story.append(dp)
-caption("Figure 13. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
+caption("Figure 14. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
         "then reinforcement learning to make the reasoning reliable (stage 4).")
 
 p("What happens in SFT (stage 3)", H3)
@@ -1405,7 +1475,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#A9CCE3"), G3],
     series_names=["Cosmos-Reason1 7B", "Cosmos-Reason1 56B"],
     w=320, h=170, vmin=0, vmax=80, step=20, ylabel="benchmark score (%)"))
-caption("Figure 14. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
+caption("Figure 15. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
         "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model. "
         "<b>Source note:</b> numbers are from NVIDIA's Cosmos-Reason1 research page (released 7B "
         "checkpoint). An earlier arXiv v1 of the paper reported an <i>8B</i> model with somewhat "
@@ -1418,7 +1488,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#F5CBA7"), G4],
     series_names=["Before RL (SFT only)", "After Physical-AI RL"],
     w=320, h=170, vmin=0, vmax=100, step=20, ylabel="score (%)"))
-caption("Figure 15. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
+caption("Figure 16. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
         "(combined reasoning) and +7.0 points (intuitive physics) — evidence that post-training, "
         "not just size, drives physical reasoning. <b>Source note:</b> research-page figures; arXiv "
         "v1 reports different magnitudes (e.g. intuitive physics 65.7&rarr;68.7). The <i>direction</i> "
@@ -1460,7 +1530,7 @@ audit = [
     ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
      "NVIDIA research page", "OK"],
     ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
-    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 14–15 scores",
+    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 15–16 scores",
      "Research page vs arXiv v1", "CAVEAT — see below"],
     ["12", "Cosmos 3: mixture-of-transformers omnimodel; Super/Nano/Edge; #1 on open leaderboards",
      "NVIDIA newsroom (Jun 2026)", "OK"],
@@ -1516,7 +1586,7 @@ spacer(4)
 p("The two caveats, in detail", H3)
 bullets([
     "<b>! Cosmos-Reason1 size & scores (claim 11):</b> NVIDIA's research page describes a "
-    "released <b>7B</b> model with the scores plotted in Figures 14–15. The <b>arXiv v1</b> of the "
+    "released <b>7B</b> model with the scores plotted in Figures 15–16. The <b>arXiv v1</b> of the "
     "paper instead describes an <b>8B</b> model and reports different numbers (e.g. physical "
     "common sense 52.3% vs 54.3%; intuitive-physics RL gain 65.7&rarr;68.7 vs 74.5&rarr;81.5). "
     "This is a paper-revision difference. This guide uses the <b>research-page (7B)</b> figures "
