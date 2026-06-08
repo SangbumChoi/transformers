@@ -78,10 +78,12 @@ def coco_to_cxcywh_norm(bboxes, width, height):
     return torch.stack([(x + w / 2) / width, (y + h / 2) / height, w / width, h / height], dim=-1)
 
 
-def coco_to_xyxy_abs(bboxes, width, height):
-    boxes = torch.tensor(bboxes, dtype=torch.float32).reshape(-1, 4)
-    x, y, w, h = boxes.unbind(-1)
-    return torch.stack([x, y, x + w, y + h], dim=-1)
+def cxcywh_norm_to_xyxy_abs(boxes, width, height):
+    """Normalized (cx, cy, w, h) -> absolute (x_min, y_min, x_max, y_max)."""
+    cx, cy, w, h = boxes.unbind(-1)
+    return torch.stack(
+        [(cx - w / 2) * width, (cy - h / 2) * height, (cx + w / 2) * width, (cy + h / 2) * height], dim=-1
+    )
 
 
 def build_examples(split, max_samples, drop_first_class):
@@ -171,28 +173,23 @@ def postprocess_predictions(model_type, outputs, labels, processor, enc, categor
             outputs, text_labels=[categories] * bs, threshold=0.0, nms_threshold=0.5, target_sizes=target_sizes
         )
         return [{"boxes": r["boxes"], "scores": r["scores"], "labels": r["labels"]} for r in results]
-    # grounding_dino: labels come back as text -> map robustly to class ids.
-    # A non-zero text_threshold is required: with 0.0 every box decodes to the whole prompt and all
-    # predictions collapse onto a single class.
-    results = processor.post_process_grounded_object_detection(
-        outputs, enc["input_ids"], threshold=0.05, text_threshold=0.25, target_sizes=target_sizes
-    )
-    cat_clean = [c.lower() for c in categories]
+    # grounding_dino: do NOT decode text. Grounding DINO classifies a box by similarity between its query and
+    # the text tokens, so for many similar/fine-grained classes the decoded phrase is empty/ambiguous and every
+    # box collapses onto one class. Instead score each query against every class directly, by pooling the token
+    # logits over each class's token span (`build_label_maps`), then argmax over classes -- like OWL/OmDet.
+    from transformers.models.grounding_dino.modeling_grounding_dino import build_label_maps
+
+    probs = outputs.logits.sigmoid()  # (batch, num_queries, num_text_tokens)
+    label_maps = build_label_maps(outputs.logits, enc["input_ids"])
     preds = []
-    for r in results:
-        boxes, scores = r["boxes"], r["scores"]
-        n = boxes.shape[0]
-        # keep box/score/label counts aligned (post_process can return a phrase list of a different length)
-        text_labels = list(r.get("text_labels") or r.get("labels") or [])[:n]
-        ids = []
-        for t in text_labels:
-            t = str(t).strip().lower()
-            mid = next((i for i, c in enumerate(cat_clean) if t and (t == c or t in c or c in t)), 0)
-            ids.append(mid)
-        ids += [0] * (n - len(ids))
-        preds.append(
-            {"boxes": boxes, "scores": scores[:n], "labels": torch.tensor(ids, device=boxes.device, dtype=torch.long)}
-        )
+    for i, lab in enumerate(labels):
+        lm = label_maps[i].to(probs.dtype)  # (num_classes, num_text_tokens), 1 for the class's tokens
+        lm = lm / lm.sum(dim=-1, keepdim=True).clamp(min=1.0)  # mean-pool over each class's tokens
+        class_scores = probs[i] @ lm.t()  # (num_queries, num_classes)
+        scores, ids = class_scores.max(dim=-1)
+        h, w = lab["orig_size"].tolist()
+        boxes = cxcywh_norm_to_xyxy_abs(outputs.pred_boxes[i], w, h)
+        preds.append({"boxes": boxes, "scores": scores, "labels": ids})
     return preds
 
 
