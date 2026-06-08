@@ -515,10 +515,10 @@ fev = [
      "than Transfer1-7B with better alignment & less hallucination.",
      "Folded into the generator tower (conditioning / control)"],
     ["Reason",
-     "1: physical-AI reasoning VLM (7B/56B), hybrid Mamba-MLP-Transformer, 16K context, SFT + RL "
-     "(GRPO), long chain-of-thought.  "
-     "2: 256K context (16× longer), adds OCR + 2D/3D point localization + bounding boxes + stronger "
-     "spatial grounding; #1 open model.",
+     "1: physical-AI reasoning VLM (7B/56B), NVIDIA hybrid Mamba-MLP-Transformer backbone, 16K "
+     "context, SFT + RL (GRPO), long chain-of-thought.  "
+     "2: NEW backbone (post-trained from Qwen3-VL), 2B/8B/32B, 256K context (16×), adds OCR + 2D/3D "
+     "point localization + bounding boxes + timestamp precision; #1 open model.",
      "Becomes the reasoner tower"],
     ["Tokenizer",
      "1: causal autoencoder; continuous (CV) for diffusion + discrete (DV, FSQ 64k vocab) for "
@@ -1472,8 +1472,8 @@ audit = [
      "control blocks distributed 1 per 7 (vs at start)", "NVIDIA research page", "OK — exact"],
     ["18", "Reason 1 = hybrid Mamba-MLP-Transformer; 16K context; SFT + RL",
      "arXiv 2503.15558 (html)", "OK — exact"],
-    ["19", "Reason 2 = 2B/8B; 256K context (up from 16K); OCR + 2D/3D localization; #1 open",
-     "NVIDIA/HF Reason 2 blog", "OK — exact"],
+    ["19", "Reason 2 = 2B/8B/32B; Qwen3-VL backbone (Reason1 was Mamba-hybrid); 256K context; "
+     "OCR + 2D/3D localization; #1 open", "HF Reason2 model card", "OK — exact"],
     ["20", "Cosmos 3 = two-tower MoT (Nano 16B = 8+8, Super 64B = 32+32); ViT/VAE encoders; 3D mRoPE",
      "NVIDIA/HF Cosmos 3 blog", "OK"],
     ["21", "Cosmos 3 reasons + generates in ONE unified forward pass; separate weights, joint "
@@ -1580,6 +1580,20 @@ story.append(fig_image("cosmos_assets/transfer_controls.jpg", 12.5))
 caption("Left→right: depth, segmentation and edge control maps. Cosmos Transfer turns structured "
         "inputs like these into photorealistic video (sim-to-real). "
         "Source: research.nvidia.com/labs/cosmos-lab/cosmos-transfer2.5/")
+
+p("A4 · Cosmos Reason 2 — Physical AI Bench by model size", H3)
+story.append(vbar(
+    data=[[62.21, 45.52, 57.37, 64.14],
+          [73.73, 56.90, 67.85, 69.96],
+          [75.85, 60.60, 70.15, 77.79]],
+    cats=["General", "Robotics", "Self-Driving", "Smart Spaces"],
+    series_colors=[colors.HexColor("#AED6F1"), G2, colors.HexColor("#1B4F72")],
+    series_names=["Reason2-2B", "Reason2-8B", "Reason2-32B"],
+    w=460, h=185, vmin=0, vmax=90, step=20, ylabel="PAI-Bench score (%)"))
+caption("Reason 2 (built on a Qwen3-VL backbone) across the four Physical AI Bench domains. Even the "
+        "small 2B (62.21 General) is competitive with the previous-generation Reason 1-7B (~56% on "
+        "its older benchmark) — a real efficiency leap, though the benchmarks differ in version. "
+        "Source: huggingface.co/nvidia/Cosmos-Reason2-8B (model card).")
 
 story.append(PageBreak())
 
