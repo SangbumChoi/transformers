@@ -884,16 +884,20 @@ p("“Parameters” (B = billion) are the model's adjustable knobs &mdash; more 
 
 p("Every model variant at a glance", H3)
 ms = [
-    ["Generation", "Variants (parameters)", "Helper models"],
-    ["Cosmos 1", "Diffusion 7B & 14B; Autoregressive 4B & 12B (5B/13B for Video2World)",
-     "Tokenizer 77–105M; Prompt-upsampler 12B; Diffusion-decoder 7B"],
-    ["Cosmos 2", "0.6B (Text2Image), 2B, 14B", "Sparse-attention inference path"],
-    ["Cosmos 2.5", "2B & 14B (each: pre-trained + post-trained); auto 7-cam & robot 3-cam variants",
+    ["Generation / family", "Key models (sizes)", "Helper / notes"],
+    ["Cosmos 1", "Predict: Diffusion 7B & 14B + Autoregressive 4B & 12B (5B/13B Video2World)  ·  "
+     "Reason 1: 7B / 56B", "Tokenizer 77–105M; Prompt-upsampler 12B; Diffusion-decoder 7B"],
+    ["Cosmos 2 (Predict 2)", "Text2Image 0.6B / 2B / 14B  ·  Video2World 2B / 14B "
+     "(+ 2B action-conditioned, 14B GR00T-Dreams samples)", "Sparse attention (NATTEN), up to 2.6×"],
+    ["Cosmos 2.5", "Predict 2.5: 2B & 14B (+ auto 7-cam, robot 3-cam)  ·  Transfer 2.5: 2B",
      "Cosmos-Reason1 as text encoder"],
-    ["Cosmos 3", "Super (max accuracy), Nano (sub-second), Edge (local, soon)", "Built-in reasoning transformer"],
+    ["Reason 2 (2026)", "2B / 8B / 32B (post-trained from Qwen3-VL)",
+     "256K context; OCR + 2D/3D localization; #1 open"],
+    ["Cosmos 3", "Nano 16B (8B+8B)  ·  Super 64B (32B+32B)  ·  Edge (soon)",
+     "Two-tower mixture-of-transformers"],
 ]
 md = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(ms)]
-mt = Table(md, colWidths=[2.5*cm, 8.5*cm, 6.0*cm])
+mt = Table(md, colWidths=[3.0*cm, 8.5*cm, 5.5*cm])
 mt.setStyle(TableStyle([
     ("BACKGROUND", (0,0), (-1,0), NV_GREEN),
     ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
