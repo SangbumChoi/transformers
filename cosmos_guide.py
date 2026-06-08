@@ -696,6 +696,80 @@ caption("Table 7. Only Predict has the two-engine split. Note “autoregressive�
 
 story.append(PageBreak())
 
+# ================================================================ PAGE — keynote: the one factor
+p("Keynote: the ONE factor that separates the two engines", H2)
+p("Both engines are really <b>conditional video generators</b> that learned spatial + temporal "
+  "physics from video (the “world model” label is about the <i>goal</i>, not the mechanism). They "
+  "differ on a <b>single fundamental axis</b> &mdash; and almost everything else follows from it: "
+  "<b>how, and in what order, they generate.</b>", BODY)
+
+# --- diagram: generation order
+gd2 = Drawing(482, 150)
+# DIFFUSION (top)
+label(gd2, 0, 134, "DIFFUSION — refine the WHOLE clip at once (continuous, bidirectional)",
+      8, DARK, anchor="start", bold=True)
+gd2.add(Rect(40, 92, 168, 34, fillColor=colors.HexColor("#EFEFEF"), strokeColor=G1, strokeWidth=1.0, rx=4, ry=4))
+for k in range(4):
+    gd2.add(Rect(48+k*40, 98, 30, 22, fillColor=colors.HexColor("#E8F5D5"), strokeColor=G1, strokeWidth=0.6))
+arrow(gd2, 215, 109, 300, 109, color=G1, w=1.3)
+label(gd2, 257, 118, "denoise × many steps", 6.5, GREY)
+label(gd2, 257, 99, "(all frames together)", 6, GREY)
+box(gd2, 300, 95, 60, 28, ["clean", "video"], colors.white, fs=7)
+label(gd2, 124, 86, "continuous · bidirectional · all-at-once", 6.2, GREY)
+# AUTOREGRESSIVE (bottom)
+label(gd2, 0, 64, "AUTOREGRESSIVE — predict the NEXT piece from the past (discrete, causal)",
+      8, DARK, anchor="start", bold=True)
+xs = [48, 130, 212, 294]
+for k, x in enumerate(xs):
+    gd2.add(Rect(x, 26, 30, 22, fillColor=colors.HexColor("#FDEBD5"), strokeColor=G4, strokeWidth=0.6))
+    gd2.add(String(x+15, 34, "t%d" % (k+1), textAnchor="middle", fontSize=7, fillColor=DARK))
+    if k < 3:
+        arrow(gd2, x+30, 37, xs[k+1], 37, color=G4, w=1.1)
+label(gd2, 165, 14, "discrete tokens · causal · one step at a time (time's arrow)", 6.2, GREY)
+story.append(gd2)
+caption("Figure 6. The deep difference: diffusion improves the entire clip together over many steps "
+        "(it can see past AND future); autoregressive builds the future one step at a time from the "
+        "past only — like time itself.")
+
+p("Everything else cascades from that one axis", H3)
+csq = [
+    ["", "Diffusion (holistic)", "Autoregressive (causal)"],
+    ["Representation", "continuous 16-dim latents", "discrete 64k codes (lossy)"],
+    ["Objective", "denoising score-matching", "next-token cross-entropy"],
+    ["Context", "bidirectional (whole spacetime)", "causal (past only)"],
+    ["Clip length", "fixed (set up front)", "arbitrary / streaming / extendable"],
+    ["Error over time", "globally consistent, no drift", "accumulates drift"],
+    ["Speed / quality", "many steps → slower, top fidelity", "KV-cache → real-time; lossy (needs decoder)"],
+    ["Lineage", "vision / graphics", "language models"],
+]
+cq = [[cellP(c, header=(i==0)) for c in r] for i, r in enumerate(csq)]
+cqt = Table(cq, colWidths=[3.0*cm, 7.0*cm, 7.0*cm], repeatRows=1)
+cqstyle = [
+    ("BACKGROUND", (0,0), (0,0), DARK),
+    ("BACKGROUND", (1,0), (1,0), G1), ("BACKGROUND", (2,0), (2,0), G4),
+    ("GRID", (0,0), (-1,-1), 0.5, BORDER), ("VALIGN", (0,0), (-1,-1), "TOP"),
+    ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 3),
+    ("LEFTPADDING", (0,0), (-1,-1), 5),
+    ("BACKGROUND", (0,1), (0,-1), colors.HexColor("#EEEEEE")),
+]
+for i in range(1, len(cq)):
+    if i % 2 == 0: cqstyle.append(("BACKGROUND", (1,i), (-1,i), ROW_ALT))
+cqt.setStyle(TableStyle(cqstyle))
+story.append(cqt)
+caption("Table 8. Each row is a downstream consequence of the single “generation order + "
+        "representation” difference at the top.")
+
+p("Why it matters for a WORLD model", H3)
+p("The physical world is <b>causal</b> &mdash; the future follows from the past, and a robot acts "
+  "<b>step by step</b>. Autoregressive next-token prediction <b>mirrors time's arrow</b>, which is "
+  "why it is the natural path to <b>interactive, streaming, real-time</b> world simulation. Diffusion "
+  "treats a clip as a block to be perfected holistically, which is why it wins on <b>per-clip realism "
+  "and global coherence</b>. That single trade-off is exactly why Cosmos kept both &mdash; and why "
+  "<b>Cosmos 3 uses each for what it is best at</b>: the autoregressive <b>reasoner</b> tower (causal "
+  "understanding) + the diffusion <b>generator</b> tower (high-fidelity creation).", BODY)
+
+story.append(PageBreak())
+
 # ================================================================ PAGE — why each generation
 p("Why each new generation? (the problem it solved)", H2)
 p("A fair question: was each new version just a <b>bigger model on more data</b>? <b>No.</b> Scale "
@@ -734,7 +808,7 @@ prstyle = [
 ]
 prt.setStyle(TableStyle(prstyle))
 story.append(prt)
-caption("Table 8. Read the rightmost column: every jump is a genuine idea, not a scale-up. "
+caption("Table 9. Read the rightmost column: every jump is a genuine idea, not a scale-up. "
         "1→2 buys speed; 2→2.5 buys understanding + simplicity; 2.5→3 buys a whole new capability.")
 
 p("The one-sentence “why”", H3)
@@ -758,7 +832,7 @@ cats = ["Nature dynamics", "Manipulation", "Navigation", "Driving", "Human motio
         "First-person POV", "Camera movement", "Synthetic render", "Other"]
 vals = [20, 16, 16, 11, 10, 8, 8, 4, 7]
 story.append(hbar(vals, cats, G1, w=482, h=185, vmax=22))
-caption("Figure 6. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
+caption("Figure 7. Diversity is intentional: nature, robot manipulation, and navigation dominate, "
         "but driving, human motion and synthetic data are all represented. This breadth is what lets "
         "one pretrained model be fine-tuned for many downstream robots/vehicles.")
 
@@ -780,7 +854,7 @@ dt.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(dt)
-caption("Table 9. The jump from “100M clips” to “20T tokens” reflects Cosmos 3 also ingesting "
+caption("Table 10. The jump from “100M clips” to “20T tokens” reflects Cosmos 3 also ingesting "
         "text, audio and robot/human action data &mdash; not just video. "
         "<b>Caveat:</b> Cosmos 3's exact counts (20T tokens, ~1B images, ~400M videos) come from "
         "press coverage; NVIDIA's official release states only “billions of samples across text, "
@@ -877,7 +951,7 @@ for i in span_rows:
     hstyle.append(("SPAN", (1,i), (2,i)))
 ht.setStyle(TableStyle(hstyle))
 story.append(ht)
-caption("Table 10. NVIDIA published far more hyperparameters for Cosmos 1 than for the closed-er "
+caption("Table 11. NVIDIA published far more hyperparameters for Cosmos 1 than for the closed-er "
         "later releases; 2.5 and 3 reuse the same design DNA (3D-RoPE positions, AdaLN-LoRA, a "
         "causal tokenizer) at larger scale.")
 
@@ -909,7 +983,7 @@ iot.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(iot)
-caption("Table 11. The input distribution broadens from “text + frames” (Cosmos 1) to a full "
+caption("Table 12. The input distribution broadens from “text + frames” (Cosmos 1) to a full "
         "five-modality stream including audio and actions (Cosmos 3). The output likewise grows from "
         "“a short video” to “video + the physical actions a robot should take”.")
 
@@ -949,7 +1023,7 @@ spt.setStyle(TableStyle([
     ("BACKGROUND", (0,2), (-1,2), ROW_ALT), ("BACKGROUND", (0,4), (-1,4), ROW_ALT),
 ]))
 story.append(spt)
-caption("Table 12. Two concrete, comparable speedups are published: Cosmos 1's tokenizer (up to "
+caption("Table 13. Two concrete, comparable speedups are published: Cosmos 1's tokenizer (up to "
         "12×) and Cosmos 2's sparse attention (up to 2.6×). 2.5 and 3 emphasise efficiency "
         "via flow sampling and a sub-second Nano tier rather than a single headline multiplier.")
 
@@ -959,7 +1033,7 @@ story.append(vbar(
     cats=["Cosmos 1\ntokenizer", "Cosmos 2\nsparse attn"],
     series_colors=[NV_GREEN], series_names=None,
     w=300, h=160, vmin=0, vmax=14, step=2, ylabel="speedup (×)", barlabels=True))
-caption("Figure 7. The two directly-quoted “× speedup” numbers. (Different things are being "
+caption("Figure 8. The two directly-quoted “× speedup” numbers. (Different things are being "
         "sped up &mdash; tokenizer vs. whole pipeline &mdash; so this compares <i>magnitude of "
         "improvement</i>, not absolute latency.)")
 
@@ -1034,7 +1108,7 @@ attn_grid(dia, 300, 35, neighborhood=True)
 label(dia, 338, 18, "NEIGHBOURHOOD (sparse) attention", 8, DARK, bold=True)
 label(dia, 338, 6, "1 patch → only nearby patches (cheap)", 7, GREY)
 story.append(dia)
-caption("Figure 8. Left: every patch attends to all others (lines everywhere). Right: each patch "
+caption("Figure 9. Left: every patch attends to all others (lines everywhere). Right: each patch "
         "attends only to its local window — the grey patches are skipped. Cosmos 2 (via the NATTEN "
         "library) drops up to 98% of the connections, keeping only the ~2% that matter.")
 
@@ -1119,7 +1193,7 @@ label(dia, x0, yb+24, "noise", 7, GREY)
 label(dia, x1+4, yb+16, "video", 7, GREY)
 label(dia, 240, yb-22, "FLOW MATCHING (Cosmos 2.5): near-straight path, FEW big steps", 8, DARK, bold=True)
 story.append(dia)
-caption("Figure 9. Same start (noise) and destination (video). Diffusion zig-zags there in many "
+caption("Figure 10. Same start (noise) and destination (video). Diffusion zig-zags there in many "
         "small steps; flow matching learns a near-straight route it can cover in a few big steps.")
 
 p("Why Cosmos 2.5 switched to it", H3)
@@ -1161,7 +1235,7 @@ arrow(fd, 366, 74, 382, 74)
 box(fd, 382, 42, 100, 64, ["OUTPUTS", "Text · Video", "Audio · Action", "(synchronised)"], colors.white, fs=7)
 label(fd, 235, 8, "one token sequence, aligned on a shared time axis by 3D mRoPE", 6.2, GREY)
 story.append(fd)
-caption("Figure 10. Each modality is encoded into a shared space, concatenated into one sequence, and "
+caption("Figure 11. Each modality is encoded into a shared space, concatenated into one sequence, and "
         "processed by a two-tower Mixture-of-Transformers: separate weights per modality/tower, but "
         "one global attention so audio, video, text and action all “see” each other.")
 
@@ -1241,7 +1315,7 @@ label(jd, 230, 30, "every layer", 6, GREY)
 arrow(jd, 338, 35, 376, 35)
 box(jd, 376, 20, 96, 30, ["video + action", "+ audio"], colors.white, fs=7)
 story.append(jd)
-caption("Figure 11. Old = a pipeline of two models; the generator only received the reasoner's text. "
+caption("Figure 12. Old = a pipeline of two models; the generator only received the reasoner's text. "
         "Cosmos 3 = one model where reasoning and generation tokens share attention at every layer.")
 
 p("The precise picture", H3)
@@ -1293,7 +1367,7 @@ for i, (lines, fill, stroke) in enumerate(stages):
 label(dp, 110, 18, "general knowledge", 6.5, GREY)
 label(dp, 360, 18, "sharpened physical reasoning", 6.5, GREY)
 story.append(dp)
-caption("Figure 12. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
+caption("Figure 13. Knowledge first (stages 1–2), then physical-world specialisation (stage 3), "
         "then reinforcement learning to make the reasoning reliable (stage 4).")
 
 p("What happens in SFT (stage 3)", H3)
@@ -1327,7 +1401,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#A9CCE3"), G3],
     series_names=["Cosmos-Reason1 7B", "Cosmos-Reason1 56B"],
     w=320, h=170, vmin=0, vmax=80, step=20, ylabel="benchmark score (%)"))
-caption("Figure 13. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
+caption("Figure 14. The 56B model beats the 7B on both physical-common-sense and embodied-reasoning "
         "benchmarks. Embodied reasoning improved by ~+10–11 points over the next-best prior model. "
         "<b>Source note:</b> numbers are from NVIDIA's Cosmos-Reason1 research page (released 7B "
         "checkpoint). An earlier arXiv v1 of the paper reported an <i>8B</i> model with somewhat "
@@ -1340,7 +1414,7 @@ story.append(vbar(
     series_colors=[colors.HexColor("#F5CBA7"), G4],
     series_names=["Before RL (SFT only)", "After Physical-AI RL"],
     w=320, h=170, vmin=0, vmax=100, step=20, ylabel="score (%)"))
-caption("Figure 14. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
+caption("Figure 15. Adding the GRPO reinforcement-learning stage raised the 7B model by +5.0 points "
         "(combined reasoning) and +7.0 points (intuitive physics) — evidence that post-training, "
         "not just size, drives physical reasoning. <b>Source note:</b> research-page figures; arXiv "
         "v1 reports different magnitudes (e.g. intuitive physics 65.7&rarr;68.7). The <i>direction</i> "
@@ -1382,7 +1456,7 @@ audit = [
     ["9", "Cosmos 2.5: flow; Reason1 encoder; 2B/14B; 200M clips; 30s; PAI-Bench 0.810; 2.3× FVD/FID",
      "NVIDIA research page", "OK"],
     ["10", "GRPO post-training; 4-stage pipeline; verifiable rewards", "arXiv 2503.15558", "OK"],
-    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 13–14 scores",
+    ["11", "Cosmos-Reason1 = 7B & 56B with the Fig 14–15 scores",
      "Research page vs arXiv v1", "CAVEAT — see below"],
     ["12", "Cosmos 3: mixture-of-transformers omnimodel; Super/Nano/Edge; #1 on open leaderboards",
      "NVIDIA newsroom (Jun 2026)", "OK"],
@@ -1432,13 +1506,13 @@ for i in range(1, len(ad)):
         astyle.append(("BACKGROUND", (0,i), (2,i), ROW_ALT))
 at.setStyle(TableStyle(astyle))
 story.append(at)
-caption("Table 13. Claims audit. Green = verified against a primary source; amber = caveat.")
+caption("Table 14. Claims audit. Green = verified against a primary source; amber = caveat.")
 
 spacer(4)
 p("The two caveats, in detail", H3)
 bullets([
     "<b>! Cosmos-Reason1 size & scores (claim 11):</b> NVIDIA's research page describes a "
-    "released <b>7B</b> model with the scores plotted in Figures 13–14. The <b>arXiv v1</b> of the "
+    "released <b>7B</b> model with the scores plotted in Figures 14–15. The <b>arXiv v1</b> of the "
     "paper instead describes an <b>8B</b> model and reports different numbers (e.g. physical "
     "common sense 52.3% vs 54.3%; intuitive-physics RL gain 65.7&rarr;68.7 vs 74.5&rarr;81.5). "
     "This is a paper-revision difference. This guide uses the <b>research-page (7B)</b> figures "
