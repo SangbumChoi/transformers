@@ -1624,98 +1624,66 @@ p("Cosmos went from <b>“many tools that dream video”</b> (1) → <b>“the b
 
 story.append(PageBreak())
 
-# ================================================================ PAGE — test your understanding
-p("Test your understanding", H2)
-p("Use these to check you really absorbed the ideas (answers on the next page). If you can answer "
-  "in a sentence or two, you've got it.", BODY)
+# ================================================================ PAGE — open research questions
+p("Open questions worth chewing on (for the curious & the researcher)", H2)
+p("Pretraining gives a <b>foundational baseline</b> — but is the current recipe (predict every "
+  "pixel, on ever-more data) the right one? These are deliberately <b>unsettled</b>, first-principles "
+  "questions with no official answers; they are here to provoke thinking about where this whole "
+  "pipeline could go next.", BODY)
 
-QS = ParagraphStyle("QS", parent=BODY, leftIndent=16, firstLineIndent=-16, spaceAfter=5)
-def q(n, text): story.append(Paragraph("<b>%d.</b>  %s" % (n, text), QS))
+OQ = ParagraphStyle("OQ", parent=BODY, leftIndent=16, firstLineIndent=-16, spaceAfter=8, leading=14)
+def oq(n, lead, text):
+    story.append(Paragraph("<b>%d. %s —</b> %s" % (n, lead, text), OQ))
 
-p("Basics", H3)
-q(1, "In one sentence, what is a “World Foundation Model”, and how is it different from a language model?")
-q(2, "Cosmos is “a platform, not one model.” Name the three core families and what each one does.")
+p("Where should capacity, data and compute actually go?", H3)
+oq(1, "Do we really need to model every pixel?",
+   "In a driving scene the <b>sky</b> carries almost no decision-relevant information, while the "
+   "<b>road, pedestrians and vehicles</b> carry almost all of it — yet uniform pixel-prediction "
+   "pretraining spends as much capacity on empty sky as on a child at the curb. Could a world model "
+   "allocate <b>tokens, compute and loss by information value</b> (saliency-, task-, or agent-driven) "
+   "and reach the same <i>useful</i> fidelity with far less data and compute? What is the right "
+   "“value function” over pixels — and who defines it: a saliency model, the task, or the agent's "
+   "own policy?")
+oq(2, "Does a world model need to render pixels at all?",
+   "For control, an agent may only need an accurate predictive model in a compact <b>latent/state</b> "
+   "space, not photorealistic frames. When is pixel-level generation truly essential versus wasteful "
+   "— and could the reasoner's internal representation <i>be</i> the world model, with pixels "
+   "rendered only on demand?")
+oq(3, "Should the model choose where to look based on the goal?",
+   "Driving cares about road and agents; manipulation cares about the hand-object contact. Could an "
+   "<b>action- or goal-conditioned</b> tokenizer/attention learn to spend capacity only on "
+   "causally-relevant regions — a foveated, agent-centric world model — instead of treating every "
+   "frame uniformly?")
+oq(4, "What is the information floor for a competent world model?",
+   "If most clips and pixels are redundant, could <b>active or curriculum selection</b> of "
+   "high-information experience (rare events, contact-rich, high-motion, near-misses) replace "
+   "brute-force 20M-hour / 20T-token pretraining? And how would we even <i>measure</i> the "
+   "information value of data before the model is trained?")
+oq(5, "Is the fixed-FPS frame the right unit of experience?",
+   "Constant-clock sampling wastes capacity on static stretches and under-samples the instant of "
+   "contact or collision. Should world models be <b>event-/keyframe-driven</b> — predicting at "
+   "moments of change — rather than at a fixed frame rate?")
 
-p("The two engines (diffusion vs autoregressive)", H3)
-q(3, "What is the single most important factor that separates the diffusion engine from the "
-     "autoregressive engine?")
-q(4, "Explain “bidirectional” vs “causal next-token” attention in your own words — and say which "
-     "engine uses which.")
-q(5, "Why does the autoregressive engine need a “diffusion decoder”, while the diffusion engine "
-     "does not?")
-q(6, "Which engine is the natural fit for real-time, streaming world simulation — and why does that "
-     "connect to how the physical world actually works?")
-q(7, "Why does “error drift” hurt the autoregressive engine but not the diffusion engine in the same "
-     "way?")
+p("Deeper bets and open ablations", H3)
+oq(6, "Must understanding require generation?",
+   "If the bet is “prediction = understanding”, does the model have to <b>generate</b> the future, "
+   "or only <b>anticipate/score</b> it? Could physical understanding be learned by predictive or "
+   "contrastive coding over high-value tokens, with no pixel synthesis at all — and would that "
+   "transfer <i>better</i> to action?")
+oq(7, "Is the joint model actually better than a good pipeline?",
+   "Does coupling reasoning and generation (Cosmos 3's joint two towers) beat a strong "
+   "reason-then-generate <b>pipeline</b> on the same task by enough to justify the complexity? Where "
+   "does shared attention genuinely improve physical consistency — and where is it overkill?")
+oq(8, "Do our metrics measure the thing we actually want?",
+   "We optimise FVD / FID / PAI-Bench, but the real target is <b>downstream policy success</b>. How "
+   "well do generation-quality scores predict whether a robot trained on the synthetic experience "
+   "performs better — and could a model that looks <i>worse</i> but is more <b>causally correct</b> "
+   "train better policies?")
 
-p("Tokenizer & techniques", H3)
-q(8, "The tokenizer has two flavours (continuous and discrete). Which feeds diffusion, and which "
-     "feeds autoregressive?")
-q(9, "In easy terms, what does sparse attention (NATTEN) do, and roughly what speedup did it give "
-     "Cosmos 2?")
-q(10, "What problem does flow matching solve versus diffusion, and what is the “straight vs wandering "
-      "path” idea?")
-
-p("Platform & generations", H3)
-q(11, "Was each new generation just “a bigger model on more data”? Give one real novelty for 1→2, "
-      "2→2.5, and 2.5→3.")
-q(12, "The families don't version in lockstep. Which generation was essentially a “Predict-only” "
-      "refresh?")
-q(13, "What is Transfer's job, and how does it differ from Predict?")
-
-p("Cosmos 3 (advanced)", H3)
-q(14, "Does Cosmos 3 reason first and then generate (staged), or both at once? Explain “separate "
-      "weights but joint attention.”")
-q(15, "How does Cosmos 3 fuse five modalities (incl. audio) into one model? Name the three "
-      "ingredients, and map the old families onto its two towers.")
-q(16, "Are Cosmos Reason 1 and Reason 2 the same model? What backbone does each use — and what's the "
-      "honest caveat about “Reason 2-2B beats Reason 1-7B”?")
-
-story.append(PageBreak())
-
-# ================================================================ PAGE — answer key
-p("Answer key", H2)
-AS = ParagraphStyle("AS", parent=SMALL, leftIndent=16, firstLineIndent=-16, spaceAfter=5, leading=12)
-def a(n, text): story.append(Paragraph("<b>%d.</b>  %s" % (n, text), AS))
-
-a(1, "A model that learns from video to predict what happens next in the <b>physical world</b> (how "
-    "things move/collide), instead of predicting the next <b>word</b> like a language model. Goal: "
-    "simulate the world for Physical AI.")
-a(2, "<b>Predict</b> = generate the future world (video); <b>Transfer</b> = controllable sim→real "
-    "from structure maps; <b>Reason</b> = a VLM that understands and decides. (+ Tokenizer/Curator/"
-    "RL/Guardrails tools.)")
-a(3, "<b>How and in what order they generate:</b> diffusion = holistic / parallel / continuous "
-    "(refine the whole clip at once); autoregressive = causal / sequential / discrete (predict the "
-    "next token from the past).")
-a(4, "<b>Bidirectional</b> (diffusion): a token sees tokens before AND after it (fill-in-the-blank). "
-    "<b>Causal next-token</b> (autoregressive): a token sees only the past and predicts the next "
-    "(autocomplete / time).")
-a(5, "Autoregressive uses heavy discrete compression that adds artifacts, so a small diffusion "
-    "decoder cleans its output. Diffusion already works in continuous space, so it needs no fix.")
-a(6, "<b>Autoregressive</b> — it builds the future from the past one step at a time, which mirrors "
-    "time's arrow and how a robot acts step by step, so it can stream/extend indefinitely.")
-a(7, "Autoregressive feeds its own (possibly wrong) outputs back in, so errors compound over time. "
-    "Diffusion refines the whole clip together, so there's no left-to-right snowball.")
-a(8, "<b>Continuous</b> tokens → diffusion; <b>discrete</b> (FSQ, 64k vocab) tokens → autoregressive.")
-a(9, "Each patch attends only to nearby patches (a local window) instead of all patches, dropping up "
-    "to ~98% of connections → <b>up to 2.6× faster</b> at 720p.")
-a(10, "Diffusion follows a curved, many-step path from noise to video; flow matching learns a "
-     "near-<b>straight</b> path you can cover in <b>far fewer, bigger steps</b> → faster, cleaner.")
-a(11, "No. 1→2 = sparse attention (≈2.6×) + action conditioning; 2→2.5 = task unification + flow "
-     "matching + Reason1 encoder + RL; 2.5→3 = mixture-of-transformers + audio/action modalities.")
-a(12, "<b>Cosmos 2</b> — mainly a Predict upgrade (Transfer and Reason didn't get a “2” then).")
-a(13, "Transfer turns <b>structured inputs</b> (depth/segmentation/LiDAR/HD-map) into photorealistic "
-     "video (sim→real) via ControlNet on top of Predict; Predict generates more freely from text/"
-     "image/video.")
-a(14, "<b>Both at once</b> — one unified forward pass. The two towers have their own weights "
-     "(specialised) but share <b>joint attention</b> at every layer, so reasoning and generation are "
-     "<b>coupled, not deferred</b>. (The reasoner can also run alone as a VLM.)")
-a(15, "(i) a dedicated encoder per modality → a shared space; (ii) one token sequence + global "
-     "attention aligned by 3D mRoPE; (iii) Mixture-of-Transformers (own weights per modality, shared "
-     "attention). Towers: Reason → reasoner; Predict + Transfer → generator.")
-a(16, "<b>No</b> — different models. Reason 1 = NVIDIA hybrid Mamba-MLP-Transformer (7B/56B); Reason "
-     "2 = post-trained from Qwen3-VL (2B/8B/32B). The 2B>7B read is directionally right, but the "
-     "benchmarks (PAI-Bench versions) differ, so it isn't an exact same-test comparison.")
+story.append(Paragraph(
+    "The thread running through all of these: a world model's job may not be to reproduce the world, "
+    "but to capture the <b>small slice of it that changes a decision</b> — which reframes data, "
+    "tokenisation, compute, and even whether we generate pixels at all.", ANALOGY))
 
 story.append(PageBreak())
 
