@@ -41,18 +41,22 @@ pip install -r requirements.txt
 
 ## Quickstart — synthetic demo (no download)
 
-The fastest way to see the whole loop work is the built-in **synthetic dataset**:
-a handful of colored geometric shapes (circle / square / triangle in red / green /
-blue / yellow) rendered on the fly with Pillow. It is fully offline, perfectly
-reproducible, and — by construction — fewer than 50 images.
+The fastest way to see the whole loop work is the built-in **synthetic dataset**,
+rendered on the fly with Pillow. It is fully offline, perfectly reproducible, and —
+by construction — fewer than 50 images. To avoid trivial memorization it mixes
+three task types over **8 colors** and **6 shapes** (circle, square, triangle,
+star, pentagon, diamond):
+
+- **single shape** → `"<color> <shape>"` (e.g. `red star`)
+- **inside** → `"a <color> <shape> inside a <color> <shape>"` (e.g. *a red circle inside a blue star*)
+- **left of** → `"a <color> <shape> to the left of a <color> <shape>"`
 
 ```bash
-python finetune_lfm2_vl.py --demo --max_samples 16 --num_train_epochs 8
+python finetune_lfm2_vl.py --demo --max_samples 30 --num_train_epochs 10
 ```
 
-The script prints the model's answer to *"What colored shape is in this image?"*
-**before** and **after** fine-tuning, so you can watch it learn the new
-`<color> <shape>` response format on just 16 images.
+The script prints the model's answer **before** and **after** fine-tuning, so you
+can watch it learn both the naming format and the compositional spatial relations.
 
 ## Fine-tune on a real (tiny) dataset
 

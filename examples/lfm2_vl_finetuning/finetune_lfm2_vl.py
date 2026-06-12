@@ -26,20 +26,21 @@ small GPU (or even CPU for a smoke test).
 
 Two data sources are supported:
 
-* ``--demo`` (default): a fully synthetic, self-contained dataset of colored
-  geometric shapes generated with Pillow. No download required, exactly
-  ``--max_samples`` images, perfectly reproducible. Great for verifying the
-  pipeline end-to-end and for teaching the model a brand-new behaviour you can
-  measure (it learns to answer "What colored shape is this?").
+* ``--demo`` (default): a fully synthetic, self-contained dataset generated with
+  Pillow. It mixes single colored shapes (8 colors x 6 shapes) with compositional
+  *spatial relations* — e.g. "a red circle inside a blue star" or "a green square
+  to the left of a purple triangle". No download required, exactly ``--max_samples``
+  images, perfectly reproducible. The extra diversity makes the tiny dataset much
+  harder to simply memorize, so the measured gains reflect learning, not overfitting.
 * ``--dataset_name <hub id>``: a slice of a real vision-language dataset from the
   Hub (e.g. ``HuggingFaceH4/llava-instruct-mix-vsft``), capped to
   ``--max_samples`` (< 50) examples.
 
 Example
 -------
-Synthetic smoke test (no dataset download, ~16 images)::
+Synthetic smoke test (no dataset download, ~30 images)::
 
-    python finetune_lfm2_vl.py --demo --max_samples 16 --num_train_epochs 8
+    python finetune_lfm2_vl.py --demo --max_samples 30 --num_train_epochs 10
 
 Tiny slice of a real dataset (40 images)::
 
@@ -50,6 +51,7 @@ Tiny slice of a real dataset (40 images)::
 
 import argparse
 import logging
+import math
 import random
 
 import torch
@@ -88,7 +90,7 @@ def parse_args():
     parser.add_argument(
         "--max_samples",
         type=int,
-        default=16,
+        default=30,
         help="Number of (image, text) pairs to train on. Kept below 50 on purpose.",
     )
 
@@ -114,55 +116,133 @@ def parse_args():
 
 
 # --------------------------------------------------------------------------------------
-# Synthetic dataset: colored geometric shapes (< 50 images, fully offline)
+# Synthetic dataset: colored shapes + spatial relations (< 50 images, fully offline)
 # --------------------------------------------------------------------------------------
-SHAPES = ["circle", "square", "triangle"]
+# A richer task than single shapes alone: more colors, more shapes, and compositional
+# "inside" / "left of" relations. The extra diversity makes the tiny dataset much
+# harder to simply memorize, so improvements reflect learning rather than overfitting.
+SHAPES = ["circle", "square", "triangle", "star", "pentagon", "diamond"]
 COLORS = {
     "red": (220, 50, 50),
-    "green": (50, 180, 80),
+    "green": (40, 170, 80),
     "blue": (60, 90, 220),
     "yellow": (240, 200, 40),
+    "orange": (240, 140, 30),
+    "purple": (150, 60, 200),
+    "cyan": (40, 190, 200),
+    "pink": (240, 120, 180),
 }
+QUESTION_SINGLE = "What colored shape is in this image? Answer with '<color> <shape>'."
+QUESTION_SPATIAL = "Describe the spatial relationship between the two shapes in this image."
 
 
-def _draw_shape(color_name, shape_name, size=256):
-    """Render a single solid shape on a white background."""
+def _polygon_points(shape_name, cx, cy, r):
+    """Vertices for the polygonal shapes (circle/square are drawn directly)."""
+    if shape_name == "triangle":
+        return [(cx, cy - r), (cx - r * 0.92, cy + r * 0.8), (cx + r * 0.92, cy + r * 0.8)]
+    if shape_name == "diamond":
+        return [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
+    if shape_name == "pentagon":
+        return [(cx + r * math.sin(2 * math.pi * i / 5), cy - r * math.cos(2 * math.pi * i / 5)) for i in range(5)]
+    if shape_name == "star":
+        points = []
+        for i in range(10):
+            radius = r if i % 2 == 0 else r * 0.45
+            angle = math.pi * i / 5 - math.pi / 2
+            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+        return points
+    raise ValueError(f"Unknown polygonal shape: {shape_name}")
+
+
+def _draw_one(draw, shape_name, color_name, cx, cy, r):
+    """Draw a single solid shape centered at ``(cx, cy)`` with radius ``r``."""
+    fill = COLORS[color_name]
+    if shape_name == "circle":
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+    elif shape_name == "square":
+        draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill=fill)
+    else:
+        draw.polygon(_polygon_points(shape_name, cx, cy, r), fill=fill)
+
+
+def _render_single(color_name, shape_name, size=256):
+    image = Image.new("RGB", (size, size), (255, 255, 255))
+    _draw_one(ImageDraw.Draw(image), shape_name, color_name, size // 2, size // 2, size // 3)
+    return image
+
+
+def _render_inside(c_out, s_out, c_in, s_in, size=256):
     image = Image.new("RGB", (size, size), (255, 255, 255))
     draw = ImageDraw.Draw(image)
-    fill = COLORS[color_name]
-    pad = size // 5
-    box = [pad, pad, size - pad, size - pad]
-    if shape_name == "circle":
-        draw.ellipse(box, fill=fill)
-    elif shape_name == "square":
-        draw.rectangle(box, fill=fill)
-    else:  # triangle
-        draw.polygon([(size // 2, pad), (pad, size - pad), (size - pad, size - pad)], fill=fill)
+    _draw_one(draw, s_out, c_out, size // 2, size // 2, size // 2 - 14)
+    _draw_one(draw, s_in, c_in, size // 2, size // 2, size // 7)
+    return image
+
+
+def _render_beside(c_l, s_l, c_r, s_r, size=256):
+    image = Image.new("RGB", (size, size), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    _draw_one(draw, s_l, c_l, size // 4, size // 2, size // 7)
+    _draw_one(draw, s_r, c_r, 3 * size // 4, size // 2, size // 7)
     return image
 
 
 def build_demo_dataset(max_samples, seed):
-    """Build up to ``max_samples`` (image, question, answer) records of colored shapes."""
+    """Build ``max_samples`` records split across single-shape and spatial-relation tasks."""
     rng = random.Random(seed)
-    combos = [(c, s) for c in COLORS for s in SHAPES]
-    rng.shuffle(combos)
-    if max_samples < len(combos):
-        combos = combos[:max_samples]
-    else:
-        # repeat combos so every (color, shape) pair is well represented
-        combos = [combos[i % len(combos)] for i in range(max_samples)]
+    n_single = max(1, round(max_samples * 0.4))
+    n_inside = max(1, round(max_samples * 0.3))
+    n_beside = max(1, max_samples - n_single - n_inside)
+
+    def random_pair():
+        c1, c2 = rng.sample(list(COLORS), 2)
+        s1, s2 = rng.sample(SHAPES, 2)
+        return c1, s1, c2, s2
 
     records = []
-    for color_name, shape_name in combos:
-        image = _draw_shape(color_name, shape_name)
+
+    # Single shapes: distinct (color, shape) combinations.
+    single_combos = [(c, s) for c in COLORS for s in SHAPES]
+    rng.shuffle(single_combos)
+    for color_name, shape_name in single_combos[:n_single]:
         records.append(
             {
-                "image": image,
-                "question": "What colored shape is in this image? Answer with '<color> <shape>'.",
+                "image": _render_single(color_name, shape_name),
+                "question": QUESTION_SINGLE,
                 "answer": f"{color_name} {shape_name}",
             }
         )
-    logger.info("Built synthetic demo dataset with %d images.", len(records))
+
+    # "inside" relation: a small shape centered within a larger one.
+    for _ in range(n_inside):
+        c_out, s_out, c_in, s_in = random_pair()
+        records.append(
+            {
+                "image": _render_inside(c_out, s_out, c_in, s_in),
+                "question": QUESTION_SPATIAL,
+                "answer": f"a {c_in} {s_in} inside a {c_out} {s_out}",
+            }
+        )
+
+    # "left of" relation: two shapes side by side.
+    for _ in range(n_beside):
+        c_l, s_l, c_r, s_r = random_pair()
+        records.append(
+            {
+                "image": _render_beside(c_l, s_l, c_r, s_r),
+                "question": QUESTION_SPATIAL,
+                "answer": f"a {c_l} {s_l} to the left of a {c_r} {s_r}",
+            }
+        )
+
+    rng.shuffle(records)
+    logger.info(
+        "Built synthetic demo dataset with %d images (%d single, %d inside, %d beside).",
+        len(records),
+        n_single,
+        n_inside,
+        n_beside,
+    )
     return records
 
 
