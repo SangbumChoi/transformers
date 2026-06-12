@@ -27,20 +27,21 @@ small GPU (or even CPU for a smoke test).
 Two data sources are supported:
 
 * ``--demo`` (default): a fully synthetic, self-contained dataset generated with
-  Pillow. It mixes single colored shapes (8 colors x 6 shapes) with compositional
-  *spatial relations* — e.g. "a red circle inside a blue star" or "a green square
-  to the left of a purple triangle". No download required, exactly ``--max_samples``
-  images, perfectly reproducible. The extra diversity makes the tiny dataset much
-  harder to simply memorize, so the measured gains reflect learning, not overfitting.
+  Pillow. It spans **40 colors** and **12 shapes** (2D plus shaded pseudo-3D cube /
+  sphere / cylinder / cone / pyramid), and mixes single-shape naming with five
+  *spatial relations* — inside / left / right / above / below (e.g. "the red circle
+  is inside the blue star", "the green cube is above the gold sphere"). No download
+  required, exactly ``--max_samples`` images, perfectly reproducible. Each image is
+  essentially unique, so the tiny dataset cannot be solved by memorizing a few labels.
 * ``--dataset_name <hub id>``: a slice of a real vision-language dataset from the
   Hub (e.g. ``HuggingFaceH4/llava-instruct-mix-vsft``), capped to
   ``--max_samples`` (< 50) examples.
 
 Example
 -------
-Synthetic smoke test (no dataset download, ~30 images)::
+Synthetic smoke test (no dataset download, ~40 images)::
 
-    python finetune_lfm2_vl.py --demo --max_samples 30 --num_train_epochs 10
+    python finetune_lfm2_vl.py --demo --max_samples 40 --num_train_epochs 12
 
 Tiny slice of a real dataset (40 images)::
 
@@ -90,7 +91,7 @@ def parse_args():
     parser.add_argument(
         "--max_samples",
         type=int,
-        default=30,
+        default=40,
         help="Number of (image, text) pairs to train on. Kept below 50 on purpose.",
     )
 
@@ -116,12 +117,14 @@ def parse_args():
 
 
 # --------------------------------------------------------------------------------------
-# Synthetic dataset: colored shapes + spatial relations (< 50 images, fully offline)
+# Synthetic dataset: colored 2D/3D shapes + spatial relations (< 50 images, fully offline)
 # --------------------------------------------------------------------------------------
-# A richer task than single shapes alone: more colors, more shapes, and compositional
-# "inside" / "left of" relations. The extra diversity makes the tiny dataset much
-# harder to simply memorize, so improvements reflect learning rather than overfitting.
-SHAPES = ["circle", "square", "triangle", "star", "pentagon", "diamond"]
+# A diverse task: 40 colors, 12 shapes (2D + shaded pseudo-3D), and five spatial
+# relations (inside / left / right / above / below). Each image is essentially unique,
+# so the tiny dataset cannot be memorized by a few flat labels.
+#
+# Every record is {image, question, answer}. The model's *input* is the image plus the
+# `question`; the `answer` is the ground-truth label it is trained to produce.
 COLORS = {
     "red": (220, 50, 50),
     "green": (40, 170, 80),
@@ -131,73 +134,159 @@ COLORS = {
     "purple": (150, 60, 200),
     "cyan": (40, 190, 200),
     "pink": (240, 120, 180),
+    "magenta": (200, 40, 160),
+    "lime": (140, 210, 40),
+    "teal": (20, 140, 140),
+    "navy": (30, 40, 120),
+    "maroon": (130, 30, 40),
+    "olive": (120, 120, 30),
+    "brown": (140, 80, 40),
+    "gold": (212, 175, 55),
+    "salmon": (240, 130, 110),
+    "coral": (240, 110, 80),
+    "crimson": (200, 20, 60),
+    "indigo": (75, 0, 130),
+    "violet": (180, 90, 220),
+    "turquoise": (50, 200, 170),
+    "tan": (190, 150, 100),
+    "khaki": (180, 170, 90),
+    "plum": (160, 90, 150),
+    "orchid": (190, 90, 180),
+    "chocolate": (160, 90, 40),
+    "tomato": (240, 90, 60),
+    "sienna": (140, 80, 50),
+    "slateblue": (95, 95, 205),
+    "steelblue": (70, 120, 170),
+    "skyblue": (95, 170, 220),
+    "seagreen": (40, 140, 95),
+    "forestgreen": (30, 115, 50),
+    "hotpink": (240, 100, 170),
+    "deeppink": (220, 40, 120),
+    "mustard": (210, 170, 40),
+    "mint": (90, 205, 150),
+    "lavender": (170, 150, 225),
+    "rose": (220, 90, 130),
 }
+SHAPES_2D = ["circle", "square", "triangle", "diamond", "pentagon", "hexagon", "star"]
+SHAPES_3D = ["cube", "sphere", "cylinder", "cone", "pyramid"]
+SHAPES = SHAPES_2D + SHAPES_3D
+
 QUESTION_SINGLE = "What colored shape is in this image? Answer with '<color> <shape>'."
-QUESTION_SPATIAL = "Describe the spatial relationship between the two shapes in this image."
+QUESTION_SPATIAL = "Where is the {a} located relative to the {b}? Describe the spatial relationship."
 
 
-def _polygon_points(shape_name, cx, cy, r):
-    """Vertices for the polygonal shapes (circle/square are drawn directly)."""
-    if shape_name == "triangle":
-        return [(cx, cy - r), (cx - r * 0.92, cy + r * 0.8), (cx + r * 0.92, cy + r * 0.8)]
-    if shape_name == "diamond":
-        return [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
-    if shape_name == "pentagon":
-        return [(cx + r * math.sin(2 * math.pi * i / 5), cy - r * math.cos(2 * math.pi * i / 5)) for i in range(5)]
-    if shape_name == "star":
-        points = []
-        for i in range(10):
-            radius = r if i % 2 == 0 else r * 0.45
-            angle = math.pi * i / 5 - math.pi / 2
-            points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
-        return points
-    raise ValueError(f"Unknown polygonal shape: {shape_name}")
+def _shade(rgb, factor):
+    """Lighten (factor > 1) or darken (factor < 1) a color for pseudo-3D faces."""
+    return tuple(max(0, min(255, int(c * factor))) for c in rgb)
+
+
+def _ngon(n, cx, cy, r, rot=-math.pi / 2):
+    return [
+        (cx + r * math.cos(rot + 2 * math.pi * i / n), cy + r * math.sin(rot + 2 * math.pi * i / n)) for i in range(n)
+    ]
+
+
+def _star(cx, cy, r):
+    pts = []
+    for i in range(10):
+        rad = r if i % 2 == 0 else r * 0.45
+        ang = math.pi * i / 5 - math.pi / 2
+        pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+    return pts
 
 
 def _draw_one(draw, shape_name, color_name, cx, cy, r):
-    """Draw a single solid shape centered at ``(cx, cy)`` with radius ``r``."""
-    fill = COLORS[color_name]
+    """Draw a single solid 2D or shaded pseudo-3D shape centered at ``(cx, cy)``."""
+    rgb = COLORS[color_name]
     if shape_name == "circle":
-        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=fill)
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=rgb)
     elif shape_name == "square":
-        draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill=fill)
+        draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill=rgb)
+    elif shape_name == "triangle":
+        draw.polygon([(cx, cy - r), (cx - r * 0.92, cy + r * 0.8), (cx + r * 0.92, cy + r * 0.8)], fill=rgb)
+    elif shape_name == "diamond":
+        draw.polygon([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)], fill=rgb)
+    elif shape_name == "pentagon":
+        draw.polygon(_ngon(5, cx, cy, r), fill=rgb)
+    elif shape_name == "hexagon":
+        draw.polygon(_ngon(6, cx, cy, r), fill=rgb)
+    elif shape_name == "star":
+        draw.polygon(_star(cx, cy, r), fill=rgb)
+    elif shape_name == "cube":
+        draw.polygon([(cx - r, cy - r / 2), (cx, cy), (cx, cy + r), (cx - r, cy + r / 2)], fill=_shade(rgb, 0.6))
+        draw.polygon([(cx, cy), (cx + r, cy - r / 2), (cx + r, cy + r / 2), (cx, cy + r)], fill=_shade(rgb, 0.85))
+        draw.polygon([(cx, cy - r), (cx + r, cy - r / 2), (cx, cy), (cx - r, cy - r / 2)], fill=_shade(rgb, 1.2))
+    elif shape_name == "sphere":
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_shade(rgb, 0.8))
+        for i in range(7):
+            t = i / 7
+            rr = r * (1 - t) * 0.85
+            ox, oy = cx - r * 0.28, cy - r * 0.28
+            draw.ellipse([ox - rr, oy - rr, ox + rr, oy + rr], fill=_shade(rgb, 0.8 + 0.55 * t))
+    elif shape_name == "cylinder":
+        eh = r * 0.32
+        draw.ellipse([cx - r, cy + r - eh, cx + r, cy + r + eh], fill=_shade(rgb, 0.65))
+        draw.rectangle([cx - r, cy - r, cx + r, cy + r], fill=_shade(rgb, 0.85))
+        draw.ellipse([cx - r, cy - r - eh, cx + r, cy - r + eh], fill=_shade(rgb, 1.15))
+    elif shape_name == "cone":
+        eh = r * 0.32
+        draw.ellipse([cx - r, cy + r - eh, cx + r, cy + r + eh], fill=_shade(rgb, 0.65))
+        draw.polygon([(cx, cy - r), (cx - r, cy + r), (cx + r, cy + r)], fill=_shade(rgb, 0.95))
+    elif shape_name == "pyramid":
+        apex, front = (cx, cy - r), (cx, cy + r)
+        draw.polygon([apex, (cx - r, cy + r * 0.35), front], fill=_shade(rgb, 0.7))
+        draw.polygon([apex, front, (cx + r, cy + r * 0.35)], fill=_shade(rgb, 1.0))
     else:
-        draw.polygon(_polygon_points(shape_name, cx, cy, r), fill=fill)
+        raise ValueError(f"Unknown shape: {shape_name}")
+
+
+def _new_canvas(size=256):
+    return Image.new("RGB", (size, size), (255, 255, 255))
 
 
 def _render_single(color_name, shape_name, size=256):
-    image = Image.new("RGB", (size, size), (255, 255, 255))
+    image = _new_canvas(size)
     _draw_one(ImageDraw.Draw(image), shape_name, color_name, size // 2, size // 2, size // 3)
     return image
 
 
 def _render_inside(c_out, s_out, c_in, s_in, size=256):
-    image = Image.new("RGB", (size, size), (255, 255, 255))
+    image = _new_canvas(size)
     draw = ImageDraw.Draw(image)
     _draw_one(draw, s_out, c_out, size // 2, size // 2, size // 2 - 14)
     _draw_one(draw, s_in, c_in, size // 2, size // 2, size // 7)
     return image
 
 
-def _render_beside(c_l, s_l, c_r, s_r, size=256):
-    image = Image.new("RGB", (size, size), (255, 255, 255))
+def _render_pair(c1, s1, c2, s2, axis, size=256):
+    """Render two shapes side by side ('h') or stacked ('v'). Returns the image."""
+    image = _new_canvas(size)
     draw = ImageDraw.Draw(image)
-    _draw_one(draw, s_l, c_l, size // 4, size // 2, size // 7)
-    _draw_one(draw, s_r, c_r, 3 * size // 4, size // 2, size // 7)
+    r = size // 7
+    if axis == "h":
+        _draw_one(draw, s1, c1, size // 4, size // 2, r)
+        _draw_one(draw, s2, c2, 3 * size // 4, size // 2, r)
+    else:
+        _draw_one(draw, s1, c1, size // 2, size // 4, r)
+        _draw_one(draw, s2, c2, size // 2, 3 * size // 4, r)
     return image
 
 
 def build_demo_dataset(max_samples, seed):
-    """Build ``max_samples`` records split across single-shape and spatial-relation tasks."""
+    """Build ``max_samples`` records spanning single-shape and five spatial-relation tasks."""
     rng = random.Random(seed)
     n_single = max(1, round(max_samples * 0.4))
-    n_inside = max(1, round(max_samples * 0.3))
-    n_beside = max(1, max_samples - n_single - n_inside)
+    n_inside = max(1, round(max_samples * 0.15))
+    n_horizontal = max(1, round(max_samples * 0.225))
+    n_vertical = max(1, max_samples - n_single - n_inside - n_horizontal)
 
-    def random_pair():
-        c1, c2 = rng.sample(list(COLORS), 2)
-        s1, s2 = rng.sample(SHAPES, 2)
-        return c1, s1, c2, s2
+    def spatial_record(image, c1, s1, c2, s2, relation):
+        # The question names both shapes, so the relation is unambiguous.
+        return {
+            "image": image,
+            "question": QUESTION_SPATIAL.format(a=f"{c1} {s1}", b=f"{c2} {s2}"),
+            "answer": f"the {c1} {s1} is {relation} the {c2} {s2}",
+        }
 
     records = []
 
@@ -213,35 +302,44 @@ def build_demo_dataset(max_samples, seed):
             }
         )
 
-    # "inside" relation: a small shape centered within a larger one.
-    for _ in range(n_inside):
-        c_out, s_out, c_in, s_in = random_pair()
-        records.append(
-            {
-                "image": _render_inside(c_out, s_out, c_in, s_in),
-                "question": QUESTION_SPATIAL,
-                "answer": f"a {c_in} {s_in} inside a {c_out} {s_out}",
-            }
-        )
+    def pick_colors():
+        return rng.sample(list(COLORS), 2)
 
-    # "left of" relation: two shapes side by side.
-    for _ in range(n_beside):
-        c_l, s_l, c_r, s_r = random_pair()
-        records.append(
-            {
-                "image": _render_beside(c_l, s_l, c_r, s_r),
-                "question": QUESTION_SPATIAL,
-                "answer": f"a {c_l} {s_l} to the left of a {c_r} {s_r}",
-            }
-        )
+    # "inside": a small 2D shape centered within a larger 2D shape (ask about the inner one).
+    for _ in range(n_inside):
+        c_out, c_in = pick_colors()
+        s_out, s_in = rng.sample(SHAPES_2D, 2)
+        image = _render_inside(c_out, s_out, c_in, s_in)
+        records.append(spatial_record(image, c_in, s_in, c_out, s_out, "inside"))
+
+    # Horizontal pair -> "to the left of" / "to the right of" (subject chosen at random).
+    for _ in range(n_horizontal):
+        c1, c2 = pick_colors()
+        s1, s2 = rng.sample(SHAPES, 2)
+        image = _render_pair(c1, s1, c2, s2, "h")
+        if rng.random() < 0.5:
+            records.append(spatial_record(image, c1, s1, c2, s2, "to the left of"))
+        else:
+            records.append(spatial_record(image, c2, s2, c1, s1, "to the right of"))
+
+    # Vertical pair -> "above" / "below" (subject chosen at random).
+    for _ in range(n_vertical):
+        c1, c2 = pick_colors()
+        s1, s2 = rng.sample(SHAPES, 2)
+        image = _render_pair(c1, s1, c2, s2, "v")
+        if rng.random() < 0.5:
+            records.append(spatial_record(image, c1, s1, c2, s2, "above"))
+        else:
+            records.append(spatial_record(image, c2, s2, c1, s1, "below"))
 
     rng.shuffle(records)
     logger.info(
-        "Built synthetic demo dataset with %d images (%d single, %d inside, %d beside).",
+        "Built synthetic demo dataset with %d images (%d single, %d inside, %d horizontal, %d vertical).",
         len(records),
         n_single,
         n_inside,
-        n_beside,
+        n_horizontal,
+        n_vertical,
     )
     return records
 

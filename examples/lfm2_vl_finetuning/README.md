@@ -43,20 +43,26 @@ pip install -r requirements.txt
 
 The fastest way to see the whole loop work is the built-in **synthetic dataset**,
 rendered on the fly with Pillow. It is fully offline, perfectly reproducible, and —
-by construction — fewer than 50 images. To avoid trivial memorization it mixes
-three task types over **8 colors** and **6 shapes** (circle, square, triangle,
-star, pentagon, diamond):
+by construction — fewer than 50 images. It is **diverse on purpose** so the tiny
+dataset can't be solved by memorizing a few labels: **40 colors** and **12 shapes**
+(2D: circle, square, triangle, diamond, pentagon, hexagon, star; pseudo-3D: cube,
+sphere, cylinder, cone, pyramid), across six task types:
 
 - **single shape** → `"<color> <shape>"` (e.g. `red star`)
-- **inside** → `"a <color> <shape> inside a <color> <shape>"` (e.g. *a red circle inside a blue star*)
-- **left of** → `"a <color> <shape> to the left of a <color> <shape>"`
+- **inside / left / right / above / below** → a full sentence, e.g.
+  `"the red circle is inside the blue star"`, `"the green cube is to the left of the gold sphere"`,
+  `"the teal cone is above the pink cube"`
+
+Each record is `{image, question, answer}` — the **image + question** are the input,
+and the **answer** is the ground-truth label. The spatial question always names both
+shapes, so left/right and above/below are unambiguous.
 
 ```bash
-python finetune_lfm2_vl.py --demo --max_samples 30 --num_train_epochs 10
+python finetune_lfm2_vl.py --demo --max_samples 40 --num_train_epochs 12
 ```
 
 The script prints the model's answer **before** and **after** fine-tuning, so you
-can watch it learn both the naming format and the compositional spatial relations.
+can watch it learn both the naming format and the spatial relations.
 
 ## Fine-tune on a real (tiny) dataset
 
