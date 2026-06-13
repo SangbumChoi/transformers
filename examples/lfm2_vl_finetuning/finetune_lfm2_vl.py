@@ -272,21 +272,55 @@ def _render_pair(c1, s1, c2, s2, axis, size=256):
     return image
 
 
+def _render_relation(c1, s1, relation, c2, s2, size=256):
+    """Render the scene that matches the sentence 'the c1 s1 is <relation> the c2 s2'."""
+    if relation == "inside":
+        return _render_inside(c2, s2, c1, s1, size)  # c1/s1 is the inner shape
+    if relation == "to the left of":
+        return _render_pair(c1, s1, c2, s2, "h", size)  # c1/s1 on the left
+    if relation == "to the right of":
+        return _render_pair(c2, s2, c1, s1, "h", size)  # c1/s1 on the right
+    if relation == "above":
+        return _render_pair(c1, s1, c2, s2, "v", size)  # c1/s1 on top
+    if relation == "below":
+        return _render_pair(c2, s2, c1, s1, "v", size)  # c1/s1 on the bottom
+    raise ValueError(f"Unknown relation: {relation}")
+
+
+RELATIONS = ["inside", "to the left of", "to the right of", "above", "below"]
+
+
+def _single_record(color_name, shape_name):
+    return {
+        "image": _render_single(color_name, shape_name),
+        "question": QUESTION_SINGLE,
+        "answer": f"{color_name} {shape_name}",
+        "meta": ("single", color_name, shape_name),
+    }
+
+
+def _spatial_record(c1, s1, relation, c2, s2):
+    # The question names both shapes, so the relation (left vs right, above vs below) is unambiguous.
+    return {
+        "image": _render_relation(c1, s1, relation, c2, s2),
+        "question": QUESTION_SPATIAL.format(a=f"{c1} {s1}", b=f"{c2} {s2}"),
+        "answer": f"the {c1} {s1} is {relation} the {c2} {s2}",
+        "meta": ("spatial", c1, s1, relation, c2, s2),
+    }
+
+
+def _meta_colors_shapes(meta):
+    """Return (colors, shapes) appearing in a record's meta tuple."""
+    if meta[0] == "single":
+        return {meta[1]}, {meta[2]}
+    return {meta[1], meta[4]}, {meta[2], meta[5]}
+
+
 def build_demo_dataset(max_samples, seed):
     """Build ``max_samples`` records spanning single-shape and five spatial-relation tasks."""
     rng = random.Random(seed)
     n_single = max(1, round(max_samples * 0.4))
-    n_inside = max(1, round(max_samples * 0.15))
-    n_horizontal = max(1, round(max_samples * 0.225))
-    n_vertical = max(1, max_samples - n_single - n_inside - n_horizontal)
-
-    def spatial_record(image, c1, s1, c2, s2, relation):
-        # The question names both shapes, so the relation is unambiguous.
-        return {
-            "image": image,
-            "question": QUESTION_SPATIAL.format(a=f"{c1} {s1}", b=f"{c2} {s2}"),
-            "answer": f"the {c1} {s1} is {relation} the {c2} {s2}",
-        }
+    n_spatial = max_samples - n_single
 
     records = []
 
@@ -294,54 +328,82 @@ def build_demo_dataset(max_samples, seed):
     single_combos = [(c, s) for c in COLORS for s in SHAPES]
     rng.shuffle(single_combos)
     for color_name, shape_name in single_combos[:n_single]:
-        records.append(
-            {
-                "image": _render_single(color_name, shape_name),
-                "question": QUESTION_SINGLE,
-                "answer": f"{color_name} {shape_name}",
-            }
-        )
+        records.append(_single_record(color_name, shape_name))
 
-    def pick_colors():
-        return rng.sample(list(COLORS), 2)
-
-    # "inside": a small 2D shape centered within a larger 2D shape (ask about the inner one).
-    for _ in range(n_inside):
-        c_out, c_in = pick_colors()
-        s_out, s_in = rng.sample(SHAPES_2D, 2)
-        image = _render_inside(c_out, s_out, c_in, s_in)
-        records.append(spatial_record(image, c_in, s_in, c_out, s_out, "inside"))
-
-    # Horizontal pair -> "to the left of" / "to the right of" (subject chosen at random).
-    for _ in range(n_horizontal):
-        c1, c2 = pick_colors()
-        s1, s2 = rng.sample(SHAPES, 2)
-        image = _render_pair(c1, s1, c2, s2, "h")
-        if rng.random() < 0.5:
-            records.append(spatial_record(image, c1, s1, c2, s2, "to the left of"))
-        else:
-            records.append(spatial_record(image, c2, s2, c1, s1, "to the right of"))
-
-    # Vertical pair -> "above" / "below" (subject chosen at random).
-    for _ in range(n_vertical):
-        c1, c2 = pick_colors()
-        s1, s2 = rng.sample(SHAPES, 2)
-        image = _render_pair(c1, s1, c2, s2, "v")
-        if rng.random() < 0.5:
-            records.append(spatial_record(image, c1, s1, c2, s2, "above"))
-        else:
-            records.append(spatial_record(image, c2, s2, c1, s1, "below"))
+    # Spatial relations, distributed across the five relation types.
+    for i in range(n_spatial):
+        relation = RELATIONS[i % len(RELATIONS)]
+        shape_pool = SHAPES_2D if relation == "inside" else SHAPES
+        c1, c2 = rng.sample(list(COLORS), 2)
+        s1, s2 = rng.sample(shape_pool, 2)
+        records.append(_spatial_record(c1, s1, relation, c2, s2))
 
     rng.shuffle(records)
     logger.info(
-        "Built synthetic demo dataset with %d images (%d single, %d inside, %d horizontal, %d vertical).",
-        len(records),
-        n_single,
-        n_inside,
-        n_horizontal,
-        n_vertical,
+        "Built synthetic demo dataset with %d images (%d single, %d spatial).", len(records), n_single, n_spatial
     )
     return records
+
+
+def build_demo_split(max_samples, seed, n_test=16):
+    """Build a (train, test) split where every color/shape/relation is seen in training,
+    but the test combinations are novel — a compositional generalization test."""
+    train = build_demo_dataset(max_samples, seed)
+
+    seen_singles, seen_spatial = set(), set()
+    seen_colors, seen_shapes, seen_relations = set(), set(), set()
+    for record in train:
+        meta = record["meta"]
+        colors, shapes = _meta_colors_shapes(meta)
+        seen_colors |= colors
+        seen_shapes |= shapes
+        if meta[0] == "single":
+            seen_singles.add((meta[1], meta[2]))
+        else:
+            seen_spatial.add(meta)
+            seen_relations.add(meta[3])
+
+    seen_colors, seen_shapes, seen_relations = sorted(seen_colors), sorted(seen_shapes), sorted(seen_relations)
+    rng = random.Random(seed + 1)
+
+    n_test_single = max(1, round(n_test * 0.4))
+    test, used = [], set()
+
+    # Novel single (color, shape) combinations built only from seen colors/shapes.
+    attempts = 0
+    while sum(1 for r in test if r["meta"][0] == "single") < n_test_single and attempts < 2000:
+        attempts += 1
+        combo = (rng.choice(seen_colors), rng.choice(seen_shapes))
+        if combo in seen_singles or combo in used:
+            continue
+        used.add(combo)
+        test.append(_single_record(*combo))
+
+    # Novel spatial combinations (seen tokens + seen relations, unseen tuple).
+    attempts = 0
+    while len(test) < n_test and attempts < 4000:
+        attempts += 1
+        relation = rng.choice(seen_relations)
+        pool = [s for s in seen_shapes if s in SHAPES_2D] if relation == "inside" else seen_shapes
+        if len(pool) < 2 or len(seen_colors) < 2:
+            continue
+        c1, c2 = rng.sample(seen_colors, 2)
+        s1, s2 = rng.sample(pool, 2)
+        tup = ("spatial", c1, s1, relation, c2, s2)
+        if tup in seen_spatial or tup in used:
+            continue
+        used.add(tup)
+        test.append(_spatial_record(c1, s1, relation, c2, s2))
+
+    rng.shuffle(test)
+    logger.info(
+        "Held-out test set: %d novel combinations (seen %d colors, %d shapes, %d relations during training).",
+        len(test),
+        len(seen_colors),
+        len(seen_shapes),
+        len(seen_relations),
+    )
+    return train, test
 
 
 # --------------------------------------------------------------------------------------
@@ -443,6 +505,26 @@ def generate_answer(model, processor, image, question, max_new_tokens=32):
     return processor.decode(generated, skip_special_tokens=True).strip()
 
 
+_STOPWORDS = {"a", "an", "the", "to", "of", "is", "there"}
+
+
+def _normalize(text):
+    """Lowercase and drop articles/punctuation so predictions can be matched to answers."""
+    return [w for w in text.lower().replace(",", " ").replace(".", " ").split() if w not in _STOPWORDS]
+
+
+def is_correct(prediction, answer):
+    target = _normalize(answer)
+    return _normalize(prediction)[: len(target)] == target
+
+
+def evaluate(model, processor, records):
+    """Return (predictions, accuracy) over a list of {image, question, answer} records."""
+    predictions = [generate_answer(model, processor, r["image"], r["question"]) for r in records]
+    accuracy = sum(is_correct(p, r["answer"]) for p, r in zip(predictions, records)) / max(1, len(records))
+    return predictions, accuracy
+
+
 # --------------------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------------------
@@ -467,23 +549,27 @@ def main():
     model = AutoModelForImageTextToText.from_pretrained(args.model_id, dtype=dtype)
 
     # ---- Data -----------------------------------------------------------------------
+    # In demo mode we also build a held-out test set of *novel* combinations (every color,
+    # shape and relation is seen in training, but never in these arrangements) to measure
+    # generalization rather than memorization.
+    test_records = []
     if args.demo:
-        records = build_demo_dataset(args.max_samples, args.seed)
+        records, test_records = build_demo_split(args.max_samples, args.seed)
     else:
         records = build_hub_dataset(args.dataset_name, args.dataset_split, args.max_samples)
     if not records:
         raise RuntimeError("No usable training records were produced. Check the dataset/columns.")
 
     train_dataset = [_to_conversation(r) for r in records]
-    # Keep one held-out example for the qualitative before/after check.
-    eval_record = records[0]
+    # Qualitative before/after check: the held-out test set in demo mode, else one train example.
+    eval_records = test_records or records[:1]
 
     # ---- Optional: model behaviour BEFORE fine-tuning -------------------------------
+    before_preds = None
     if not args.no_eval:
         model.eval()
-        before = generate_answer(model, processor, eval_record["image"], eval_record["question"])
-        logger.info("[before] Q: %s", eval_record["question"])
-        logger.info("[before] A: %s", before)
+        before_preds, before_acc = evaluate(model, processor, eval_records)
+        logger.info("[before] accuracy on %d held-out examples: %.0f%%", len(eval_records), 100 * before_acc)
 
     # ---- LoRA -----------------------------------------------------------------------
     from peft import LoraConfig
@@ -559,10 +645,18 @@ def main():
     # ---- Optional: model behaviour AFTER fine-tuning --------------------------------
     if not args.no_eval:
         trainer.model.eval()
-        after = generate_answer(trainer.model, processor, eval_record["image"], eval_record["question"])
-        logger.info("[after]  Q: %s", eval_record["question"])
-        logger.info("[after]  A: %s", after)
-        logger.info("[target] A: %s", eval_record["answer"])
+        after_preds, after_acc = evaluate(trainer.model, processor, eval_records)
+        split_name = "held-out (unseen combinations)" if test_records else "train"
+        logger.info("[after]  accuracy on %d %s examples: %.0f%%", len(eval_records), split_name, 100 * after_acc)
+        if before_preds is not None:
+            logger.info("[before -> after] %.0f%% -> %.0f%%", 100 * before_acc, 100 * after_acc)
+        if test_records:
+            _, train_acc = evaluate(trainer.model, processor, records)
+            logger.info("[after]  train-set accuracy (memorization): %.0f%%", 100 * train_acc)
+        # Print a few example predictions for inspection.
+        for record, after in zip(eval_records[:8], after_preds[:8]):
+            mark = "OK" if is_correct(after, record["answer"]) else "  "
+            logger.info("  [%s] gt=%r  after=%r", mark, record["answer"], after)
 
 
 if __name__ == "__main__":

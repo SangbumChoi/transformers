@@ -61,8 +61,16 @@ shapes, so left/right and above/below are unambiguous.
 python finetune_lfm2_vl.py --demo --max_samples 40 --num_train_epochs 12
 ```
 
-The script prints the model's answer **before** and **after** fine-tuning, so you
-can watch it learn both the naming format and the spatial relations.
+In demo mode the script also builds a **held-out test set of unseen combinations**
+(every color, shape and relation is seen during training, but never in those
+arrangements) and reports, after training:
+
+- **train-set accuracy** — how well the model memorized what it saw, and
+- **held-out test accuracy (before → after)** — how well it *generalizes* to
+  combinations it never trained on.
+
+A large gap between the two is the overfitting signal to watch. On the pre-executed
+notebook run this came out to **100% train vs. 6% → 88% on the unseen test set**.
 
 ## Fine-tune on a real (tiny) dataset
 
