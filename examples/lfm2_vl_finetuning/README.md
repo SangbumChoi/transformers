@@ -33,6 +33,9 @@ new use case: **LoRA adapters + TRL's `SFTTrainer`**.
 | `finetune_lfm2_vl.py` | End-to-end LoRA fine-tuning script (data → train → save → before/after check). |
 | `ablation_components.py` | Component / target-module ablation: where to spend the LoRA budget. |
 | [`ABLATION.md`](./ABLATION.md) | Pre-computed ablation results + takeaways (attention-only vs all-modules; vision vs language at equal budget). |
+| `hard_dataset.py` | Higher-diversity, harder dataset (jittered, ~60 colors / ~17 shapes) used by the rank sweep. |
+| `rank_sweep.py` | Dense LoRA-rank sweep across vision / language / all-modules families. |
+| [`RANK_SWEEP.md`](./RANK_SWEEP.md) | Pre-computed sweep results: is accuracy-vs-capacity a continuous line? |
 | `requirements.txt` | Python dependencies. |
 
 ## Install
