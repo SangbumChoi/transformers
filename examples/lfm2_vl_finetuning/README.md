@@ -31,6 +31,8 @@ new use case: **LoRA adapters + TRL's `SFTTrainer`**.
 | File | Purpose |
 | --- | --- |
 | `finetune_lfm2_vl.py` | End-to-end LoRA fine-tuning script (data → train → save → before/after check). |
+| `ablation_components.py` | Component / target-module ablation: where to spend the LoRA budget. |
+| [`ABLATION.md`](./ABLATION.md) | Pre-computed ablation results + takeaways (attention-only vs all-modules; vision vs language at equal budget). |
 | `requirements.txt` | Python dependencies. |
 
 ## Install
