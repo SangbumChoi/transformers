@@ -35,7 +35,8 @@ new use case: **LoRA adapters + TRL's `SFTTrainer`**.
 | [`ABLATION.md`](./ABLATION.md) | Pre-computed ablation results + takeaways (attention-only vs all-modules; vision vs language at equal budget). |
 | `hard_dataset.py` | Higher-diversity, harder dataset (jittered, ~60 colors / ~17 shapes) used by the rank sweep. |
 | `rank_sweep.py` | Dense LoRA-rank sweep across vision / language / all-modules families. |
-| [`RANK_SWEEP.md`](./RANK_SWEEP.md) | Pre-computed sweep results: is accuracy-vs-capacity a continuous line? |
+| [`RANK_SWEEP.md`](./RANK_SWEEP.md) | Pre-computed sweep results: continuous accuracy-vs-capacity curve + weight-change-vs-accuracy analysis. |
+| `data_size_sweep.py` | Training-set-size sweep (fixed 100-image held-out test) at a fixed step budget. |
 | `requirements.txt` | Python dependencies. |
 
 ## Install

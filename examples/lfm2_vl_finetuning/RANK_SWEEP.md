@@ -77,3 +77,25 @@ capacity axis.
 > Caveat: small CPU-scale runs on a synthetic task at a fixed 6 epochs; absolute ceilings move
 > with data/epochs/scale. The shapes of the curves — vision a rising line, language/all flat
 > plateaus, a shared data ceiling — are the transferable lesson.
+
+## Does a big accuracy gain come with a big weight change?
+
+Each run also recorded the median relative weight update `||ΔW|| / ||W||` (with `ΔW = (α/r)·B·A`).
+Correlating it with held-out accuracy across the rank sweep:
+
+| family | corr(test acc, ‖ΔW‖/‖W‖) |
+| --- | ---: |
+| vision-only | **+0.95** |
+| language-only | +0.62 |
+| all-modules | −0.47 |
+
+![weight change vs accuracy](./weight_change_vs_accuracy.png)
+
+For **vision-only** the relationship is almost perfectly monotonic: as the weight update grows
+(0.006 → 0.029) the held-out accuracy climbs (14% → 67%), and vision has the **largest ΔW at every
+rank**. So where vision improves a lot, its weights move a lot — the hypothesis holds for the
+capacity-limited component. The caveat: `||ΔW||` grows with rank *mechanically* for every family
+(bigger `B·A`), yet language/all-modules gain nothing from it because they are already at the data
+ceiling. So a large weight change only converts into accuracy where there is headroom to improve;
+magnitude alone does not predict the gain across families.
+
