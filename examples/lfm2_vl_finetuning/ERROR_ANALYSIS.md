@@ -40,3 +40,5 @@ vision side reaches ~94%. To find out *why*, we categorize every held-out error 
 perceptual resolution**, not the language model. That is the mechanism behind every earlier result:
 adaptation (and weight change) concentrating on the vision side, and the data/rank scaling paying off
 through vision. Spend the budget where the information bottleneck is — here, the vision side.
+
+> Drill-down: see [COLOR_CONFUSION.md](./COLOR_CONFUSION.md) for *why these specific colors* get confused (they are RGB near-neighbors, overlapped by jitter, and collapsed by the frozen encoder).
