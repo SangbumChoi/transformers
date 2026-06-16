@@ -36,6 +36,8 @@ Model: **LiquidAI/LFM2-VL-450M** (350M LFM2 LM + 86M SigLIP2 encoder). LoRA + TR
 
 🔬 **Weight forensics back it up.** The size of the LoRA weight update (‖ΔW‖/‖W‖) tracked accuracy gains almost perfectly for the vision encoder (**r = +0.95**) and not at all for the already-saturated language side — and **vision's weight updates were the largest of all.**
 
+🔎 **Error breakdown nails the mechanism.** All three setups solve the spatial-relation questions **100%** — reasoning is fine. Almost every mistake is a **fine-grained color confusion** (gold→khaki, sapphire→cobalt…). Language-only makes the most of them and is worst on pure-perception questions (60% vs 80%). With the encoder frozen, the LM can't recover colors it was never given — only adapting **vision** fixes it. The bottleneck is *perception*, not language.
+
 **Takeaway:** for a visual-understanding task, the gains — and the weight changes — concentrate on the **vision side**. So that's where the budget should go: **as you scale, give the vision encoder more capacity (rank) and more data**, not the language model. More broadly: the right place for fine-tuning budget depends on which resource is the *binding constraint* — diagnose that first.
 
 ⚙️ Small stuff on a CPU box; the big sweeps on **Hugging Face Jobs (A10G GPU)** — total GPU spend ~$5. Small models + synthetic data = ML science you can actually afford to run end-to-end.

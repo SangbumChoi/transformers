@@ -40,6 +40,7 @@ new use case: **LoRA adapters + TRL's `SFTTrainer`**.
 | `hf_job_size_sweep.py` | Self-contained UV script to run the data-size sweep on a GPU via HF Jobs. |
 | `hf_job_rank_sweep_5000.py` | Self-contained UV script: LoRA-rank sweep at train=5000 on a GPU via HF Jobs. |
 | [`DATA_SIZE.md`](./DATA_SIZE.md) | Pre-computed data-scaling results: more data lifts the generalization ceiling (73% → 93%). |
+| `hf_job_error_analysis.py` / [`ERROR_ANALYSIS.md`](./ERROR_ANALYSIS.md) | Error-type breakdown: language-only plateaus due to a frozen-encoder *perception* bottleneck (not reasoning). |
 | `requirements.txt` | Python dependencies. |
 
 ## Install
