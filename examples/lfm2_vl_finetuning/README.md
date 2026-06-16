@@ -38,6 +38,7 @@ new use case: **LoRA adapters + TRL's `SFTTrainer`**.
 | [`RANK_SWEEP.md`](./RANK_SWEEP.md) | Pre-computed sweep results: continuous accuracy-vs-capacity curve + weight-change-vs-accuracy analysis. |
 | `data_size_sweep.py` | Training-set-size sweep (fixed 100-image held-out test) at a fixed step budget — CPU/modular. |
 | `hf_job_size_sweep.py` | Self-contained UV script to run the data-size sweep on a GPU via HF Jobs. |
+| `hf_job_rank_sweep_5000.py` | Self-contained UV script: LoRA-rank sweep at train=5000 on a GPU via HF Jobs. |
 | [`DATA_SIZE.md`](./DATA_SIZE.md) | Pre-computed data-scaling results: more data lifts the generalization ceiling (73% → 93%). |
 | `requirements.txt` | Python dependencies. |
 

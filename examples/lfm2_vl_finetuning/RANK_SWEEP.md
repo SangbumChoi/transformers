@@ -99,3 +99,34 @@ capacity-limited component. The caveat: `||ΔW||` grows with rank *mechanically*
 ceiling. So a large weight change only converts into accuracy where there is headroom to improve;
 magnitude alone does not predict the gain across families.
 
+
+## Rank sweep again, but data-rich (train = 5000)
+
+The plateaus above were at **30** training images, where the task is data-limited. Re-running the
+sweep at **train = 5000** (fixed 100-image held-out test, 2000 steps, run on an A10G via HF Jobs with
+[`hf_job_rank_sweep_5000.py`](./hf_job_rank_sweep_5000.py)) shows the regime shift:
+
+| rank | vision-only | language-only | all modules |
+| ---: | ---: | ---: | ---: |
+| 1  | 76% | 85% | 89% |
+| 4  | 89% | 86% | 91% |
+| 16 | 93% | 86% | 91% |
+| 64 | **94%** | 86% | **94%** |
+
+![rank sweep @5000](./rank_sweep_5000_results.png)
+
+**What changed with 100× more data:**
+
+- **Every curve shifts up** — the whole task got easier per the data-scaling result (the ~69% ceiling
+  became ~86–94%).
+- **Vision-only goes from capped to top.** At 30 images it saturated at 67%; at 5000 it climbs
+  76% → 94% with rank and now *reaches* the best accuracy. With enough data, adapting the vision
+  encoder pays off — but it needs the capacity (rank) to do it.
+- **Language-only is *still* flat with rank** (85% → 86% from r=1 to r=64) — it remains
+  parameter-efficient/saturating — but its plateau is now the **lowest** of the three. The roles flip:
+  at low data language-only was the efficient winner; at high data on a visually hard task the
+  **vision encoder becomes the bottleneck**, so language-only alone leaves accuracy on the table.
+- **Best at scale:** `all_both r=64` and `vision_all r=64`, both 94%. When data is plentiful, spend
+  capacity broadly (or on vision); when data is scarce, a low-rank language adapter is the efficient
+  choice. The right place for the LoRA budget depends on which resource — data or capacity — is the
+  binding constraint.

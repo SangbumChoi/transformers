@@ -1,0 +1,62 @@
+[
+  {
+    "config": "vision_all",
+    "rank": 1,
+    "test_acc": 0.76
+  },
+  {
+    "config": "vision_all",
+    "rank": 4,
+    "test_acc": 0.89
+  },
+  {
+    "config": "vision_all",
+    "rank": 16,
+    "test_acc": 0.93
+  },
+  {
+    "config": "vision_all",
+    "rank": 64,
+    "test_acc": 0.94
+  },
+  {
+    "config": "language_all",
+    "rank": 1,
+    "test_acc": 0.85
+  },
+  {
+    "config": "language_all",
+    "rank": 4,
+    "test_acc": 0.86
+  },
+  {
+    "config": "language_all",
+    "rank": 16,
+    "test_acc": 0.86
+  },
+  {
+    "config": "language_all",
+    "rank": 64,
+    "test_acc": 0.86
+  },
+  {
+    "config": "all_both",
+    "rank": 1,
+    "test_acc": 0.89
+  },
+  {
+    "config": "all_both",
+    "rank": 4,
+    "test_acc": 0.91
+  },
+  {
+    "config": "all_both",
+    "rank": 16,
+    "test_acc": 0.91
+  },
+  {
+    "config": "all_both",
+    "rank": 64,
+    "test_acc": 0.94
+  }
+]
