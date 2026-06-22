@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thin-Film Deposition — Process Data Correlation Explorer</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--line:#2d333b;--txt:#e6edf3;--muted:#8b949e;--teal:#2bb3b0;--amber:#e9b872;--red:#e5534b;--green:#3fb950;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:13px;line-height:1.45}
+header{padding:18px 22px 4px}
+h1{font-size:19px;margin:0 0 6px}
+header p{color:var(--muted);max-width:1000px;margin:3px 0}
+.wrap{display:flex;flex-wrap:wrap;gap:14px;padding:14px 22px 30px;align-items:flex-start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+h2{font-size:13px;margin:0 0 8px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+h2 .sub{color:#5a6675;font-weight:400;margin-left:6px}
+canvas{display:block;border-radius:6px}
+select{background:#1f2630;color:var(--txt);border:1px solid var(--line);border-radius:7px;padding:4px 9px;font-size:12px;cursor:pointer}
+.cap{color:var(--muted);font-size:11px;margin-top:6px}
+.tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.ok{background:#143b2a;color:var(--green)} .bad{background:#3a1714;color:var(--red)}
+.row{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.gauge{margin:9px 0}
+.gauge .lab{display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px}
+.gbar{height:10px;border-radius:6px;background:#0b0f14;border:1px solid var(--line);overflow:hidden}
+.gfill{height:100%;border-radius:6px}
+.flags{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.flag{display:flex;justify-content:space-between;font-size:12px;padding:5px 8px;border-radius:6px;background:#0b0f14;border:1px solid var(--line)}
+.legend{color:var(--muted);font-size:11px;margin-top:6px}
+b.k{color:var(--teal)}
+</style>
+</head>
+<body>
+<header>
+ <h1>Thin-Film Deposition — Process Data Correlation Explorer</h1>
+ <p>스퍼터링/증착 공정의 <b class="k">진공·MFC·전력·온도·증착률</b> 신호 간 상관관계를 한눈에 탐색하고,
+ <b class="k">FDC</b>(이상감지)·<b class="k">SPC</b>(관리도)·<b class="k">파트 수명</b>을 함께 봅니다.</p>
+ <p class="cap">데이터는 물리적으로 그럴듯한 상관/이벤트를 갖도록 생성한 <b>합성(synthetic) 데이터</b>입니다(설명·교육용). 실측 로그로 교체하면 그대로 동작합니다.</p>
+</header>
+
+<div class="wrap">
+ <!-- correlation heatmap -->
+ <div class="card">
+  <h2>Correlation matrix <span class="sub">셀을 클릭 → 산점도 / Pearson r</span></h2>
+  <canvas id="heat" width="440" height="440"></canvas>
+  <div class="cap">색 = r (<span style="color:#7fb0ff">−1 파랑</span> · <span>0 흰색</span> · <span style="color:#ff8a7a">+1 빨강</span>) &nbsp; <span id="hov" class="muted"></span></div>
+ </div>
+
+ <!-- scatter -->
+ <div class="card">
+  <h2 id="scTitle">Scatter</h2>
+  <canvas id="scatter" width="360" height="300"></canvas>
+  <div class="cap" id="scInfo"></div>
+ </div>
+
+ <!-- time series -->
+ <div class="card" style="flex:1 1 460px;min-width:420px">
+  <h2>Time series <span class="sub">정규화 0–1 · 회색 음영 = 이벤트(누설) 구간</span></h2>
+  <canvas id="series" width="640" height="240"></canvas>
+  <div class="cap" id="serLeg"></div>
+ </div>
+
+ <!-- SPC -->
+ <div class="card">
+  <h2>SPC 관리도 <span class="sub">3σ UCL/LCL</span></h2>
+  <div style="margin-bottom:6px"><select id="spcSel"></select></div>
+  <canvas id="spc" width="360" height="230"></canvas>
+  <div class="cap" id="spcInfo"></div>
+ </div>
+
+ <!-- FDC -->
+ <div class="card" style="min-width:240px">
+  <h2>FDC 이상감지 <span id="fdcTag" class="tag ok">NORMAL</span></h2>
+  <canvas id="fdc" width="240" height="120"></canvas>
+  <div class="flags" id="fdcFlags"></div>
+  <div class="cap">센서 임계 + 이상 점수(anomaly score)로 조기 경보.</div>
+ </div>
+
+ <!-- part life -->
+ <div class="card" style="min-width:260px">
+  <h2>Part 수명 관리</h2>
+  <div id="life"></div>
+  <div class="cap">Running time / 누적 증착량 기준 교체주기 산정(예시).</div>
+ </div>
+
+ <!-- causal diagram -->
+ <div class="card" style="flex:1 1 100%">
+  <h2>공정 인과 관계 <span class="sub">화살표 = 주요 영향 방향 (히트맵의 상관을 물리로 해석)</span></h2>
+  <canvas id="causal" width="1180" height="220"></canvas>
+ </div>
+</div>
+
+<script>
+"use strict";
+// ---------- seeded RNG ----------
+let seed=20240611;
+function rnd(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;}
+function g(){let u=rnd();if(u<1e-9)u=1e-9;return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*rnd());}
+
+// ---------- synthetic process data ----------
+const N=300, EV0=250, EV1=285;            // leak/anomaly event window (recent)
+const NAMES=["Base P","Working P","Ar flow","N₂ flow","Temp","DC Power","Voltage","Refl. Power","Dep. Rate","Thickness"];
+const UNIT =["×10⁻⁷ Torr","mTorr","sccm","sccm","°C","W","V","W","Å/s","Å"];
+const S={}; NAMES.forEach(n=>S[n]=new Float64Array(N));
+let thick=0;
+for(let i=0;i<N;i++){
+ const ev = (i>=EV0 && i<EV1);
+ const Ar  = 40 + 8*Math.sin(i/40) + 0.7*g();           // gas flow drives pressure
+ const N2  = 8 + (i>150?2:0) + 0.3*g();
+ const DC  = 200 + 18*Math.sin(i/45) + (i>200?8:0) + 2.5*g();     // clear power swing
+ const WP  = 0.9 + 0.07*Ar + 0.03*N2 + (ev?0.40:0) + 0.05*g();   // Ar-dominated
+ const V   = 300 + 0.55*(DC-200) - 5*(WP-4) + (ev?-16:0) + 2*g();
+ const T   = 120 + 0.16*(DC-200) + 0.03*i + 1.2*g();
+ const Rate= 0.022*DC*(1-0.03*(WP-4)) - 0.05*N2 + (ev?-0.55:0) + 0.10*g();
+ const Refl= 2.4 + 0.35*Math.abs(g()) + (ev? 6+2*Math.abs(g()) : 0);    // spikes on leak
+ const BaseP=7 + 0.004*i + (ev? 5+2*Math.abs(g()) : 0) + 0.3*Math.abs(g()); // leak signature
+ thick += Math.max(0,Rate);
+ const row=[BaseP,WP,Ar,N2,T,DC,V,Refl,Rate,thick];
+ row.forEach((val,k)=>S[NAMES[k]][i]=val);
+}
+
+// ---------- stats ----------
+function mean(a){let s=0;for(const v of a)s+=v;return s/a.length;}
+function pearson(a,b){const ma=mean(a),mb=mean(b);let n=0,da=0,db=0;
+ for(let i=0;i<a.length;i++){const x=a[i]-ma,y=b[i]-mb;n+=x*y;da+=x*x;db+=y*y;}
+ return n/Math.sqrt(da*db+1e-12);}
+const R=NAMES.map(r=>NAMES.map(c=>pearson(S[r],S[c])));
+
+// strongest off-diagonal pair for default scatter
+let best=0,bi=0,bj=1;
+for(let i=0;i<NAMES.length;i++)for(let j=i+1;j<NAMES.length;j++){
+ if(Math.abs(R[i][j])>best && NAMES[i]!=="Thickness"){best=Math.abs(R[i][j]);bi=i;bj=j;}}
+
+// ---------- colors ----------
+function corrRGB(r){const a=Math.min(1,Math.abs(r));
+ if(r>=0) return `rgb(255,${255-Math.round(a*175)},${255-Math.round(a*195)})`;
+ return `rgb(${255-Math.round(a*195)},${255-Math.round(a*120)},255)`;}
+
+// ===================== heatmap =====================
+const hc=document.getElementById("heat"), hx=hc.getContext("2d");
+const HL=92, HT=18, CELL=(hc.width-HL-8)/NAMES.length;
+let selI=bi, selJ=bj;
+function drawHeat(){
+ hx.clearRect(0,0,hc.width,hc.height);
+ for(let i=0;i<NAMES.length;i++)for(let j=0;j<NAMES.length;j++){
+  const x=HL+j*CELL, y=HT+i*CELL;
+  hx.fillStyle=corrRGB(R[i][j]); hx.fillRect(x,y,CELL-1,CELL-1);
+  hx.fillStyle=Math.abs(R[i][j])>0.55?"#111":"#333"; hx.font="9px sans-serif"; hx.textAlign="center";
+  hx.fillText(R[i][j].toFixed(2), x+CELL/2, y+CELL/2+3);
+  if(i===selI&&j===selJ || i===selJ&&j===selI){hx.strokeStyle="#fff";hx.lineWidth=1.5;hx.strokeRect(x+.5,y+.5,CELL-2,CELL-2);}
+ }
+ hx.fillStyle="#8b949e"; hx.font="9px sans-serif";
+ hx.textAlign="right";
+ for(let i=0;i<NAMES.length;i++) hx.fillText(NAMES[i], HL-4, HT+i*CELL+CELL/2+3);
+ hx.save(); hx.textAlign="left";
+ for(let j=0;j<NAMES.length;j++){hx.save();hx.translate(HL+j*CELL+CELL/2+3,HT-4);hx.rotate(-Math.PI/2);hx.fillText(NAMES[j],0,0);hx.restore();}
+ hx.restore();
+}
+hc.addEventListener("click",e=>{
+ const r=hc.getBoundingClientRect(); const j=Math.floor((e.clientX-r.left-HL)/CELL), i=Math.floor((e.clientY-r.top-HT)/CELL);
+ if(i>=0&&i<NAMES.length&&j>=0&&j<NAMES.length&&i!==j){selI=i;selJ=j;drawHeat();drawScatter();}
+});
+hc.addEventListener("mousemove",e=>{
+ const r=hc.getBoundingClientRect(); const j=Math.floor((e.clientX-r.left-HL)/CELL), i=Math.floor((e.clientY-r.top-HT)/CELL);
+ const el=document.getElementById("hov");
+ if(i>=0&&i<NAMES.length&&j>=0&&j<NAMES.length) el.textContent=`${NAMES[i]} vs ${NAMES[j]} : r = ${R[i][j].toFixed(2)}`; else el.textContent="";
+});
+
+// ===================== scatter =====================
+const sc=document.getElementById("scatter"), sx=sc.getContext("2d");
+function drawScatter(){
+ const A=S[NAMES[selJ]], B=S[NAMES[selI]];          // x = selJ, y = selI
+ const W=sc.width,H=sc.height,L=44,Rm=10,Tp=10,Bm=28;
+ sx.fillStyle="#0b0f14"; sx.fillRect(0,0,W,H);
+ let ax=Math.min(...A),bx=Math.max(...A),ay=Math.min(...B),by=Math.max(...B);
+ const px=v=>L+(v-ax)/(bx-ax+1e-9)*(W-L-Rm), py=v=>Tp+(H-Tp-Bm)-(v-ay)/(by-ay+1e-9)*(H-Tp-Bm);
+ sx.strokeStyle="#2d333b"; sx.beginPath(); sx.moveTo(L,Tp); sx.lineTo(L,H-Bm); sx.lineTo(W-Rm,H-Bm); sx.stroke();
+ for(let i=0;i<N;i++){const ev=(i>=EV0&&i<EV1);
+  sx.fillStyle= ev?"rgba(229,83,75,.9)":"rgba(43,179,176,.55)";
+  sx.beginPath(); sx.arc(px(A[i]),py(B[i]),ev?2.6:2,0,6.2832); sx.fill();}
+ // regression line
+ const ma=mean(A),mb=mean(B); let nu=0,de=0;
+ for(let i=0;i<N;i++){nu+=(A[i]-ma)*(B[i]-mb);de+=(A[i]-ma)**2;}
+ const sl=nu/de, ic=mb-sl*ma;
+ sx.strokeStyle="#e9b872"; sx.lineWidth=2; sx.beginPath();
+ sx.moveTo(px(ax),py(sl*ax+ic)); sx.lineTo(px(bx),py(sl*bx+ic)); sx.stroke();
+ sx.fillStyle="#8b949e"; sx.font="11px sans-serif"; sx.textAlign="center";
+ sx.fillText(`${NAMES[selJ]} (${UNIT[selJ]})`,L+(W-L-Rm)/2,H-8);
+ sx.save(); sx.translate(13,Tp+(H-Tp-Bm)/2); sx.rotate(-Math.PI/2);
+ sx.fillText(`${NAMES[selI]} (${UNIT[selI]})`,0,0); sx.restore();
+ document.getElementById("scTitle").textContent=`Scatter — ${NAMES[selI]} vs ${NAMES[selJ]}`;
+ const r=R[selI][selJ];
+ document.getElementById("scInfo").innerHTML=
+  `r = <b style="color:${r>=0?'#ff8a7a':'#7fb0ff'}">${r.toFixed(3)}</b> &nbsp; (r²=${(r*r).toFixed(2)}) &nbsp;`+
+  `<span class="muted">${Math.abs(r)>.7?'강한':Math.abs(r)>.4?'중간':'약한'} ${r>=0?'양':'음'}의 상관</span> &nbsp;`+
+  `<span style="color:#e5534b">● event</span>`;
+}
+
+// ===================== time series =====================
+const se=document.getElementById("series"), ex=se.getContext("2d");
+const SER=["DC Power","Working P","Dep. Rate","Base P","Refl. Power"];
+const SCOL=["#2bb3b0","#e9b872","#7ee787","#7fb0ff","#e5534b"];
+function drawSeries(){
+ const W=se.width,H=se.height,L=8,Rm=8,Tp=8,Bm=22;
+ ex.fillStyle="#0b0f14"; ex.fillRect(0,0,W,H);
+ ex.fillStyle="rgba(139,148,158,.14)"; ex.fillRect(L+(EV0/N)*(W-L-Rm),Tp,((EV1-EV0)/N)*(W-L-Rm),H-Tp-Bm);
+ SER.forEach((nm,s)=>{const a=S[nm];let mn=Math.min(...a),mx=Math.max(...a);
+  ex.strokeStyle=SCOL[s]; ex.lineWidth=1.4; ex.beginPath();
+  for(let i=0;i<N;i++){const x=L+(i/(N-1))*(W-L-Rm), y=Tp+(H-Tp-Bm)-((a[i]-mn)/(mx-mn+1e-9))*(H-Tp-Bm);
+   i?ex.lineTo(x,y):ex.moveTo(x,y);} ex.stroke();});
+ ex.fillStyle="#8b949e"; ex.font="10px sans-serif"; ex.textAlign="center";
+ for(let t=0;t<=N;t+=50) ex.fillText(t,L+(t/(N-1))*(W-L-Rm),H-6);
+ document.getElementById("serLeg").innerHTML=SER.map((n,i)=>`<span style="color:${SCOL[i]}">■</span> ${n}`).join(" &nbsp; ")+
+  ` &nbsp; <span class="muted">x = time (s)</span>`;
+}
+
+// ===================== SPC =====================
+const spc=document.getElementById("spc"), cx=spc.getContext("2d");
+const sel=document.getElementById("spcSel");
+["Dep. Rate","Working P","Voltage","DC Power"].forEach(n=>{const o=document.createElement("option");o.value=n;o.textContent=n;sel.appendChild(o);});
+sel.value="Dep. Rate"; sel.onchange=drawSPC;
+function drawSPC(){
+ const nm=sel.value, a=S[nm], W=spc.width,H=spc.height,L=44,Rm=10,Tp=12,Bm=24;
+ const base=a.slice(0,EV0-10); const mu=mean(base);
+ let sd=Math.sqrt(mean(base.map(v=>(v-mu)**2)));
+ const UCL=mu+3*sd, LCL=mu-3*sd;
+ let lo=Math.min(LCL,...a), hi=Math.max(UCL,...a); const pad=(hi-lo)*0.08; lo-=pad;hi+=pad;
+ const px=i=>L+(i/(N-1))*(W-L-Rm), py=v=>Tp+(H-Tp-Bm)-((v-lo)/(hi-lo))*(H-Tp-Bm);
+ cx.fillStyle="#0b0f14"; cx.fillRect(0,0,W,H);
+ // limit lines
+ const lim=[[UCL,"#e5534b","UCL"],[mu,"#2bb3b0","CL"],[LCL,"#e5534b","LCL"]];
+ cx.font="9px sans-serif";
+ lim.forEach(([v,c,t])=>{cx.strokeStyle=c;cx.setLineDash(t==="CL"?[]:[4,3]);cx.beginPath();cx.moveTo(L,py(v));cx.lineTo(W-Rm,py(v));cx.stroke();cx.setLineDash([]);
+  cx.fillStyle=c;cx.textAlign="left";cx.fillText(t,W-Rm-22,py(v)-3);});
+ // points
+ let nOOC=0;
+ for(let i=0;i<N;i++){const ooc=a[i]>UCL||a[i]<LCL; if(ooc)nOOC++;
+  cx.fillStyle=ooc?"#e5534b":"#9fe7e5"; cx.beginPath(); cx.arc(px(i),py(a[i]),ooc?2.8:1.6,0,6.2832); cx.fill();}
+ cx.strokeStyle="rgba(159,231,229,.4)";cx.lineWidth=1;cx.beginPath();
+ for(let i=0;i<N;i++){i?cx.lineTo(px(i),py(a[i])):cx.moveTo(px(i),py(a[i]));}cx.stroke();
+ cx.fillStyle="#8b949e";cx.textAlign="left";cx.fillText(nm,L,Tp+2);
+ document.getElementById("spcInfo").innerHTML=
+  `CL=${mu.toFixed(2)} ${unitOf(nm)} · σ=${sd.toFixed(3)} · UCL/LCL=±3σ · `+
+  `out-of-control: <b style="color:${nOOC?'#e5534b':'#3fb950'}">${nOOC}</b> pts`;
+}
+function unitOf(nm){return UNIT[NAMES.indexOf(nm)];}
+
+// ===================== FDC =====================
+function drawFDC(){
+ const W=240,H=120,fx=document.getElementById("fdc").getContext("2d");
+ // anomaly score = normalized BaseP rise + Refl spikes
+ const bp=S["Base P"], rf=S["Refl. Power"];
+ const score=new Float64Array(N);
+ for(let i=0;i<N;i++) score[i]=Math.max(0,(bp[i]-9)/6)+Math.max(0,(rf[i]-5)/6);
+ let mx=Math.max(...score,1);
+ fx.fillStyle="#0b0f14";fx.fillRect(0,0,W,H);
+ const TH=0.5;
+ fx.fillStyle="rgba(229,83,75,.12)";fx.fillRect(0,0,W,H-(TH/mx)*(H-18)-10);
+ fx.strokeStyle="#e5534b";fx.setLineDash([4,3]);fx.beginPath();fx.moveTo(0,H-(TH/mx)*(H-18)-10);fx.lineTo(W,H-(TH/mx)*(H-18)-10);fx.stroke();fx.setLineDash([]);
+ fx.strokeStyle="#e9b872";fx.lineWidth=1.4;fx.beginPath();
+ for(let i=0;i<N;i++){const x=(i/(N-1))*W,y=H-10-(score[i]/mx)*(H-18);i?fx.lineTo(x,y):fx.moveTo(x,y);}fx.stroke();
+ fx.fillStyle="#8b949e";fx.font="9px sans-serif";fx.fillText("anomaly score",4,12);
+ // status from latest window
+ const recent=score.slice(-50); const hot=Math.max(...recent)>TH;
+ const tag=document.getElementById("fdcTag"); tag.textContent=hot?"ALARM":"NORMAL"; tag.className="tag "+(hot?"bad":"ok");
+ const recBP=Math.max(...bp.slice(-50)), recRF=Math.max(...rf.slice(-50));
+ document.getElementById("fdcFlags").innerHTML=[
+  flag("Base Pressure (recent max)", recBP.toFixed(1)+" ×10⁻⁷ Torr", recBP>10),
+  flag("Reflected Power (recent max)", recRF.toFixed(1)+" W", recRF>5),
+  flag("Leak event window", (EV0)+"–"+(EV1)+" s", true)
+ ].join("");
+}
+function flag(n,v,bad){return `<div class="flag"><span>${n}</span><span style="color:${bad?'#e5534b':'#3fb950'}">${v} ${bad?'⚠':'✓'}</span></div>`;}
+
+// ===================== part life =====================
+function drawLife(){
+ const totalRun=N;                                  // this run seconds
+ const items=[
+  ["Target running time", 412.6, 500, "h", "#2bb3b0"],
+  ["Filament running time", 287.4, 400, "h", "#e9b872"],
+  ["Cumulative deposition", 38.6, 50.0, "kÅ", "#7ee787"],
+  ["Chamber kit cycles", 612, 800, "cyc", "#7fb0ff"]
+ ];
+ document.getElementById("life").innerHTML=items.map(([n,c,m,u,col])=>{
+  const pct=Math.min(100,c/m*100); const warn=pct>80;
+  return `<div class="gauge"><div class="lab"><span>${n}</span>
+   <span style="color:${warn?'#e5534b':'#e6edf3'}">${c} / ${m} ${u} · ${pct.toFixed(0)}%</span></div>
+   <div class="gbar"><div class="gfill" style="width:${pct}%;background:${warn?'#e5534b':col}"></div></div></div>`;
+ }).join("")+`<div class="cap" style="margin-top:8px">이번 run: +${totalRun}s · 80% 초과 항목은 <span style="color:#e5534b">교체 임박</span>.</div>`;
+}
+
+// ===================== causal diagram =====================
+function drawCausal(){
+ const c=document.getElementById("causal"), q=c.getContext("2d"), W=c.width,H=c.height;
+ q.clearRect(0,0,W,H);
+ const nodes={
+  Ar:[90,60,"Ar / N₂ flow","#2bb3b0"], Pump:[90,160,"Pumping / Vacuum","#2bb3b0"],
+  WP:[330,110,"Working Pressure","#e9b872"], DC:[330,30,"DC Power","#e9b872"],
+  V:[600,40,"Voltage","#7fb0ff"], Rate:[600,140,"Deposition Rate","#7ee787"],
+  Thick:[870,140,"Thickness","#7ee787"], Refl:[600,210,"Reflected Power","#e5534b"],
+  Base:[330,205,"Base Pressure (leak)","#e5534b"], FDC:[1060,150,"FDC / SPC","#e5534b"]
+ };
+ const edges=[["Ar","WP","+"],["Pump","WP","−"],["DC","V","+"],["WP","V","−"],["DC","Rate","+"],["WP","Rate","−"],
+  ["Ar","Rate","−"],["Rate","Thick","∫"],["Base","Refl","+"],["Base","FDC","→"],["Refl","FDC","→"],["Rate","FDC","SPC"]];
+ q.font="11px sans-serif";
+ edges.forEach(([a,b,s])=>{const A=nodes[a],B=nodes[b];
+  q.strokeStyle="rgba(139,148,158,.5)";q.lineWidth=1;
+  const x1=A[0]+70,y1=A[1],x2=B[0]-70,y2=B[1];
+  q.beginPath();q.moveTo(x1,y1);q.bezierCurveTo((x1+x2)/2,y1,(x1+x2)/2,y2,x2,y2);q.stroke();
+  const ang=Math.atan2(y2-y1,x2-x1);q.fillStyle="rgba(139,148,158,.7)";
+  q.beginPath();q.moveTo(x2,y2);q.lineTo(x2-7*Math.cos(ang-0.4),y2-7*Math.sin(ang-0.4));q.lineTo(x2-7*Math.cos(ang+0.4),y2-7*Math.sin(ang+0.4));q.closePath();q.fill();
+  q.fillStyle=s==="−"?"#7fb0ff":(s==="+"?"#ff8a7a":"#8b949e");q.textAlign="center";
+  q.fillText(s,(x1+x2)/2,(y1+y2)/2-4);});
+ Object.values(nodes).forEach(([x,y,t,col])=>{
+  q.fillStyle="#0b0f14";q.strokeStyle=col;q.lineWidth=1.4;
+  q.beginPath();q.roundRect(x-70,y-16,140,32,8);q.fill();q.stroke();
+  q.fillStyle="#e6edf3";q.font="11px sans-serif";q.textAlign="center";q.fillText(t,x,y+4);});
+ q.fillStyle="#8b949e";q.textAlign="left";q.font="10px sans-serif";
+ q.fillText("＋ 양의 영향  ·  − 음의 영향  ·  ∫ 적분(누적)  ·  화살표 = 영향 방향", 16, H-8);
+}
+
+// ---------- init ----------
+drawHeat(); drawScatter(); drawSeries(); drawSPC(); drawFDC(); drawLife(); drawCausal();
+</script>
+</body>
+</html>
