@@ -116,7 +116,7 @@ table.state td:last-child{text-align:right;font-variant-numeric:tabular-nums;fon
  <p>3D photo-excited carrier cloud reconstructed from 2D time-resolved PL, compared with the measured
  photon maps and the isotropic-Gaussian model projection over the same field of view.</p>
  <p class="muted">Measured up to 58 ns; everything past 58 ns is <b>extrapolated</b> from the fit.
- Drag the 3D view to rotate.</p>
+ Carriers diffuse laterally while confined to the finite film thickness &mdash; the cloud flattens into a pancake inside the slab. Drag the 3D view to rotate.</p>
 </header>
 
 <div class="wrap">
@@ -153,10 +153,16 @@ table.state td:last-child{text-align:right;font-variant-numeric:tabular-nums;fon
   </div>
   <div class="opts">
    <label><input type="checkbox" id="cbspin" checked> auto-rotate</label>
-   <label><input type="checkbox" id="cbshell" checked> 2&sigma; sphere shell</label>
-   <span>FOV 6 &micro;m cube</span>
+   <label><input type="checkbox" id="cbfilm" checked> thin-film confinement</label>
+   <label><input type="checkbox" id="cbslab" checked> show film slab</label>
+   <label><input type="checkbox" id="cbshell"> 2&sigma; shell (free)</label>
   </div>
-  <div class="legend">4000 carriers Gaussian-sampled &middot; colour = core&rarr;edge density (jet) &middot;
+  <div class="opts">
+   <span>film thickness L</span>
+   <input type="range" id="lfilm" min="0.1" max="2" step="0.05" value="0.5" style="flex:1 1 160px;accent-color:var(--teal)">
+   <span id="lval">0.50 &micro;m</span><span>&middot; FOV 6 &micro;m</span>
+  </div>
+  <div class="legend">4000 carriers &middot; lateral spread = fitted MSD model; thickness confined to the film (reflecting surfaces) &middot;
   right image = measured photon map.</div>
  </div>
 
@@ -170,6 +176,9 @@ table.state td:last-child{text-align:right;font-variant-numeric:tabular-nums;fon
     <tr><td>Instantaneous D(t) (cm&sup2;/s)</td><td id="rD">0.285</td></tr>
     <tr><td>3D rms &radic;3&middot;&sigma; (&micro;m)</td><td id="rrms">0.99</td></tr>
     <tr><td>Spread &sigma;/&sigma;&#8320; (&times;)</td><td id="rspread">1.00</td></tr>
+    <tr><td>Lateral &sigma;<sub>xy</sub> (&micro;m)</td><td id="rlat">0.570</td></tr>
+    <tr><td>Cloud half-thickness rms (&micro;m)</td><td id="rvert">0.150</td></tr>
+    <tr><td>Aspect &sigma;<sub>xy</sub>/&sigma;<sub>z</sub> (&times;)</td><td id="rasp">3.80</td></tr>
    </table>
   </div>
   <div class="card">
@@ -204,6 +213,15 @@ function jet(v){v=Math.max(0,Math.min(1,v));
  const b=Math.max(0,Math.min(1,Math.min(4*v+0.5,-4*v+2.5)));
  return [r*255|0,g*255|0,b*255|0];}
 
+// ===== thin-film confinement =====
+let LFILM=0.5;            // film thickness (um), user-adjustable
+const SIGZ0=0.15;        // initial vertical (thickness) sigma (um)
+const PPU=(440*0.46)/(FOV/2);
+function sigZfree(t){return Math.sqrt(SIGZ0*SIGZ0+msd(t));}
+function reflectInto(z,h){const L=2*h, Pp=2*L; let u=((z+h)%Pp+Pp)%Pp; if(u>L)u=Pp-u; return u-h;}
+function proj(X,Y,Z){const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+ const x1=X*cy+Z*sy, z1=-X*sy+Z*cy, y2=Y*cp-z1*sp; return [220+x1*PPU, 220-y2*PPU];}
+
 // ===== data (Path B: synthetic; replace with original FRAMES/DATA for Path A) =====
 //__FRAMES__
 //__DATA__
@@ -225,22 +243,28 @@ const c2=$("cv2d"), x2=c2.getContext("2d"), img2=x2.createImageData(180,180);
 const expimg=$("expimg"), expov=$("expov"), expcap=$("expcap"), expreg=$("expreg");
 const plot=$("plot"), xp=plot.getContext("2d");
 const slider=$("t"), spdSel=$("spd"), playBtn=$("play"), cbspin=$("cbspin"), cbshell=$("cbshell");
+const cbfilm=$("cbfilm"), cbslab=$("cbslab"), lfilm=$("lfilm"), lval=$("lval");
 
 let yaw=0.6, pitch=0.32, t=0, playing=false, lastTS=0, raf=null, idle=null;
+let LAST_VERT=0.15;
 
 // ===== 3D point cloud =====
 function render3d(tc){
  x3.fillStyle="#05070b"; x3.fillRect(0,0,CW,CH);
- const s=sigma(tc), ppu=(CW*0.46)/(FOV/2);
+ const film=cbfilm.checked;
+ const sxy=sigma(tc), szf=sigZfree(tc), h=LFILM/2;
  const cy=Math.cos(yaw), sy=Math.sin(yaw), cp=Math.cos(pitch), sp=Math.sin(pitch);
- const a=new Array(M); let minD=1e9, maxD=-1e9;
+ const a=new Array(M); let minD=1e9, maxD=-1e9, vz2=0;
  for(let i=0;i<M;i++){const p=P[i];
-  let X=p.x*s, Y=p.y*s, Z=p.z*s;
-  let x1=X*cy+Z*sy, z1=-X*sy+Z*cy;            // yaw about Y
-  let y2=Y*cp - z1*sp, z2=Y*sp + z1*cp;       // pitch about X
-  const d=z2; if(d<minD)minD=d; if(d>maxD)maxD=d;
-  a[i]={sx:CW/2 + x1*ppu, sy:CH/2 - y2*ppu, d:d, r:p.r, g:p.g, b:p.b};
+  const X=p.x*sxy, Y=p.y*sxy;
+  const Z = film ? reflectInto(p.z*szf, h) : p.z*sxy;   // thickness confined by film surfaces
+  vz2 += Z*Z;
+  const x1=X*cy+Z*sy, z1=-X*sy+Z*cy;            // yaw about Y
+  const y2=Y*cp - z1*sp, z2=Y*sp + z1*cp;       // pitch about X
+  if(z2<minD)minD=z2; if(z2>maxD)maxD=z2;
+  a[i]={sx:CW/2 + x1*PPU, sy:CH/2 - y2*PPU, d:z2, r:p.r, g:p.g, b:p.b};
  }
+ LAST_VERT=Math.sqrt(vz2/M);                     // rms cloud half-thickness
  a.sort((p,q)=>p.d-q.d);                        // far -> near
  const span=(maxD-minD)||1;
  for(let i=0;i<M;i++){const p=a[i];
@@ -249,19 +273,29 @@ function render3d(tc){
   x3.fillStyle="rgba("+p.r+","+p.g+","+p.b+","+al.toFixed(3)+")";
   x3.beginPath(); x3.arc(p.sx,p.sy,sz,0,6.2832); x3.fill();
  }
- if(cbshell.checked){
-  const R=2*s*ppu;
+ if(film){ if(cbslab.checked) drawSlab(h); }
+ else if(cbshell.checked){
+  const R=2*sxy*PPU;
   x3.strokeStyle="rgba(255,255,255,0.16)"; x3.lineWidth=1;
-  x3.beginPath(); x3.arc(CW/2,CH/2,R,0,6.2832); x3.stroke();         // silhouette
-  x3.beginPath(); x3.ellipse(CW/2,CH/2,R,Math.max(2,R*Math.abs(Math.sin(pitch))),0,0,6.2832); x3.stroke();  // equator
-  x3.beginPath(); x3.ellipse(CW/2,CH/2,Math.max(2,R*Math.abs(Math.sin(yaw))),R,0,0,6.2832); x3.stroke();    // meridian
+  x3.beginPath(); x3.arc(CW/2,CH/2,R,0,6.2832); x3.stroke();
+  x3.beginPath(); x3.ellipse(CW/2,CH/2,R,Math.max(2,R*Math.abs(Math.sin(pitch))),0,0,6.2832); x3.stroke();
+  x3.beginPath(); x3.ellipse(CW/2,CH/2,Math.max(2,R*Math.abs(Math.sin(yaw))),R,0,0,6.2832); x3.stroke();
  }
- // 1 um scale bar
- const bar=1*ppu, bx=20, by=CH-22;
+ const bar=1*PPU, bx=20, by=CH-22;
  x3.strokeStyle="#c9d1d9"; x3.lineWidth=2;
  x3.beginPath(); x3.moveTo(bx,by); x3.lineTo(bx+bar,by); x3.stroke();
  x3.fillStyle="#c9d1d9"; x3.font="11px sans-serif"; x3.fillText("1 µm",bx,by-6);
  x3.strokeStyle="rgba(139,148,158,.35)"; x3.lineWidth=1; x3.strokeRect(8,8,CW-16,CH-16);
+}
+function drawSlab(h){
+ const e=FOV/2;
+ const c=[[-e,-e,-h],[e,-e,-h],[e,e,-h],[-e,e,-h],[-e,-e,h],[e,-e,h],[e,e,h],[-e,e,h]];
+ const pj=c.map(q=>proj(q[0],q[1],q[2]));
+ const ed=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+ x3.fillStyle="rgba(43,179,176,.06)";
+ x3.beginPath(); x3.moveTo(pj[4][0],pj[4][1]); x3.lineTo(pj[5][0],pj[5][1]); x3.lineTo(pj[6][0],pj[6][1]); x3.lineTo(pj[7][0],pj[7][1]); x3.closePath(); x3.fill();
+ x3.strokeStyle="rgba(43,179,176,.45)"; x3.lineWidth=1;
+ for(const g of ed){x3.beginPath(); x3.moveTo(pj[g[0]][0],pj[g[0]][1]); x3.lineTo(pj[g[1]][0],pj[g[1]][1]); x3.stroke();}
 }
 
 // ===== 2D model projection =====
@@ -327,18 +361,22 @@ function drawPlot(tc){
 // ===== readouts + full update =====
 function update(tc){
  t=tc;
- const s=sigma(tc);
+ const s=sigma(tc), film=cbfilm.checked;
+ render3d(tc);                                   // sets LAST_VERT
  $("rt").textContent=tc.toFixed(1);
  $("rsig").textContent=s.toFixed(3);
  $("rmsd").textContent=msd(tc).toFixed(3);
  $("rD").textContent=Dinst(tc).toFixed(3);
- $("rrms").textContent=(Math.sqrt(3)*s).toFixed(2);
+ $("rrms").textContent=(film?Math.sqrt(2*s*s+LAST_VERT*LAST_VERT):Math.sqrt(3)*s).toFixed(2);
  $("rspread").textContent=(s/SIG0).toFixed(2);
+ $("rlat").textContent=s.toFixed(3);
+ $("rvert").textContent=LAST_VERT.toFixed(3);
+ $("rasp").textContent=(s/Math.max(1e-6,LAST_VERT)).toFixed(2);
  const reg=$("regime");
  if(tc<=TMEAS){reg.textContent="measured"; reg.className="tag meas";}
  else{reg.textContent="extrapolated"; reg.className="tag extr";}
  if(Math.abs(parseFloat(slider.value)-tc)>1e-6) slider.value=tc;
- render3d(tc); render2d(tc); showExp(tc); drawPlot(tc);
+ render2d(tc); showExp(tc); drawPlot(tc);
 }
 
 // ===== animation =====
@@ -374,6 +412,9 @@ $("reset").onclick=()=>{playing=false; playBtn.innerHTML="&#9654; Play"; t=0; up
 slider.oninput=()=>{playing=false; playBtn.innerHTML="&#9654; Play"; update(parseFloat(slider.value)); startIdle();};
 cbshell.onchange=()=>render3d(t);
 cbspin.onchange=()=>{ if(cbspin.checked&&!playing)startIdle(); else stopIdle(); };
+cbfilm.onchange=()=>update(t);
+cbslab.onchange=()=>render3d(t);
+lfilm.oninput=()=>{LFILM=parseFloat(lfilm.value); lval.textContent=LFILM.toFixed(2)+" \u00b5m"; update(t);};
 
 // ===== drag rotate =====
 let drag=false, px=0, py=0;
