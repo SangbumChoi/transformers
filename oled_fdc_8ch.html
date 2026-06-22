@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OLED 8-Chamber FDC — Anomaly Detection</title>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--line:#2d333b;--txt:#e6edf3;--muted:#8b949e;--teal:#2bb3b0;--amber:#e9b872;--red:#e5534b;--green:#3fb950;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:13px;line-height:1.45}
+header{padding:18px 22px 2px}
+h1{font-size:19px;margin:0 0 6px}
+header p{color:var(--muted);max-width:1000px;margin:3px 0}
+.summary{display:flex;gap:10px;flex-wrap:wrap;padding:8px 22px 4px;align-items:center}
+.pill{padding:4px 12px;border-radius:20px;font-weight:700;font-size:12px}
+.pill.n{background:#143b2a;color:var(--green)} .pill.w{background:#3a2a14;color:var(--amber)} .pill.a{background:#3a1714;color:var(--red)}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:12px 22px}
+@media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}
+.ch{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer;transition:border-color .15s}
+.ch:hover{border-color:var(--teal)}
+.ch.sel{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal)}
+.ch.A{border-left:4px solid var(--red)} .ch.W{border-left:4px solid var(--amber)} .ch.N{border-left:4px solid var(--green)}
+.chh{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.chh b{font-size:14px}
+.badge{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:20px}
+.badge.A{background:#3a1714;color:var(--red)} .badge.W{background:#3a2a14;color:var(--amber)} .badge.N{background:#143b2a;color:var(--green)}
+.chc{color:var(--muted);font-size:11px;margin-top:5px;display:flex;justify-content:space-between}
+.detail{margin:6px 22px 26px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.detail h2{font-size:14px;margin:0 0 4px}
+.smgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}
+@media(max-width:900px){.smgrid{grid-template-columns:repeat(2,1fr)}}
+.sm{background:#0b0f14;border:1px solid var(--line);border-radius:8px;padding:6px}
+.sm .t{font-size:11px;color:var(--muted);display:flex;justify-content:space-between}
+.muted{color:var(--muted)} canvas{display:block}
+.note{color:var(--muted);font-size:11px;padding:0 22px 20px;max-width:1000px}
+b.k{color:var(--teal)}
+</style>
+</head>
+<body>
+<header>
+ <h1>OLED 증착 8-Chamber 이상감지 (FDC) 대시보드</h1>
+ <p>증착기 <b class="k">8대(CH1–CH8)</b>를 한 화면에서 모니터링합니다. 각 챔버 그래프는 다변량
+ <b class="k">이상 점수(anomaly score)</b>이며, 임계선을 넘는 구간이 <span style="color:#e5534b">빨강</span>으로 표시됩니다.
+ 챔버를 클릭하면 어떤 신호가 이상을 유발했는지 분해해서 보여줍니다.</p>
+</header>
+<div class="summary" id="summary"></div>
+<div class="grid" id="grid"></div>
+<div class="detail" id="detail"></div>
+<div class="note" id="note"></div>
+
+<script>
+"use strict";
+const N=300;
+const NAMES=["H₂O part.","O₂ part.","Base P","Host Temp","Dopant Temp","Host Rate","Dopant Rate",
+ "Doping %","Subs. Temp","EML thick","Driving V","Efficiency","EQE","CIE x","Lifetime"];
+
+// 8 chamber configs — different fault types
+const configs=[
+ {n:"CH1",desc:"reference (정상)"},
+ {n:"CH2",hostToff:-1.0,desc:"소스온도 −1.0°C 오프셋(정상범위)"},
+ {n:"CH3",fault:"contam",desc:"누설/오염 (H₂O·O₂ 스파이크)"},
+ {n:"CH4",fault:"dopdrift",desc:"도펀트 온도 드리프트 → 도핑 상승"},
+ {n:"CH5",fault:"ratedrift",desc:"호스트 온도 드리프트 → 증착률 상승"},
+ {n:"CH6",subOff:5,desc:"기판온도 과열(+5°C)"},
+ {n:"CH7",dopToff:5,desc:"과도핑 (도펀트 +5°C)"},
+ {n:"CH8",fault:"clog",desc:"소스 막힘 → 증착률 급감(step)"}
+];
+
+function genCH(cfg,sd){
+ let seed=sd;
+ const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
+ const g=()=>{let u=rnd();if(u<1e-9)u=1e-9;return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*rnd());};
+ const S={}; NAMES.forEach(n=>S[n]=new Float64Array(N));
+ for(let i=0;i<N;i++){
+  const contam = cfg.fault==="contam" && i>=255 && i<285;
+  const HostT=230+(cfg.hostToff||0)+1.5*Math.sin(i/60)+(cfg.fault==="ratedrift"&&i>120?(i-120)*0.03:0)+0.5*g();
+  const DopT =180+(cfg.dopToff||0)+2.5*Math.sin(i/70)+(cfg.fault==="dopdrift"&&i>200?(i-200)*0.08:0)+0.7*g();
+  const clog = cfg.fault==="clog"&&i>175 ? 0.70 : 1.0;
+  const HostR=1.00*Math.exp((HostT-230)/12)*clog+0.015*g();
+  const DopR =0.062*Math.exp((DopT-180)/10)+0.003*g();
+  const Dope =DopR/(HostR+DopR)*100;
+  const SubT =25+(cfg.subOff||0)+2*Math.sin(i/40)+0.6*g();
+  const EML  =(40+2.0*Math.sin(i/27+2.1)+0.6*g())*(cfg.fault==="clog"&&i>175?0.86:1);
+  const H2O  =1.4+0.3*Math.abs(g())+(contam?6+2*Math.abs(g()):0);
+  const O2   =0.8+0.2*Math.abs(g())+(contam?3+1.5*Math.abs(g()):0);
+  const BaseP=6.5+0.003*i+(contam?2+Math.abs(g()):0)+0.25*Math.abs(g());
+  const DrV  =3.8+0.08*(EML-40)+0.04*(H2O-1.4)+0.05*g();
+  const morph=1-0.012*Math.abs(SubT-25);
+  const Eff  =62*Math.exp(-Math.pow((Dope-6.2)/3.2,2))*morph*(1-0.02*(H2O-1.4))+0.6*g();
+  const EQE  =0.255*Eff+0.1*g();
+  const CIEx =0.305+0.006*(Dope-6)+0.0015*(EML-40)+0.002*g();
+  const Life =5200*Math.exp(-((H2O-1.4)+(O2-0.8))/9)*(0.6+0.4*morph)*(Eff/62)+60*g();
+  [H2O,O2,BaseP,HostT,DopT,HostR,DopR,Dope,SubT,EML,DrV,Eff,EQE,CIEx,Life].forEach((v,k)=>S[NAMES[k]][i]=v);
+ }
+ return S;
+}
+const CH=configs.map((c,i)=>({cfg:c,S:genCH(c,101+i*1337)}));
+
+function mean(a){let s=0;for(const v of a)s+=v;return s/a.length;}
+function sd(a){const m=mean(a);return Math.sqrt(mean(a.map(v=>(v-m)*(v-m))));}
+
+// monitored signals: [name, shortlabel, direction]  dir +1=high bad, -1=low bad, 0=two-sided
+const MON=[["H₂O part.","H₂O",1],["O₂ part.","O₂",1],["Subs. Temp","SubT",0],["Host Rate","Rate",0],
+ ["Dopant Rate","DopR",0],["Doping %","Doping",0],["Driving V","Volt",0]];
+// reference (healthy) from the full CH1 (정상) run
+const ref={};
+MON.forEach(([nm])=>{const b=CH[0].S[nm];const mu=mean(b);const sg=sd(b)||1e-6;ref[nm]={mu,sg};});
+const K=3.0, TH=0.8;   // per-signal exceedance start (sigma), anomaly score threshold
+
+function analyze(S){
+ const score=new Float64Array(N), cause=new Array(N), zmap={};
+ MON.forEach(([nm])=>zmap[nm]=new Float64Array(N));
+ for(let i=0;i<N;i++){let sc=0,best=0,bn="-";
+  MON.forEach(([nm,sh,dir])=>{const z=(S[nm][i]-ref[nm].mu)/ref[nm].sg; zmap[nm][i]=z;
+   const c=dir===0?Math.max(0,Math.abs(z)-K):Math.max(0,dir*z-K);
+   sc+=c; if(c>best){best=c;bn=sh;}});
+  score[i]=sc; cause[i]=bn;}
+ const recentAnom=Math.max(...score.slice(-30))>TH;
+ const anyAnom=Math.max(...score)>TH;
+ const nAnom=score.reduce((a,v)=>a+(v>TH?1:0),0);
+ const status=recentAnom?"A":(anyAnom?"W":"N");
+ const counts={}; for(let i=0;i<N;i++) if(score[i]>TH) counts[cause[i]]=(counts[cause[i]]||0)+1;
+ let dom="-",dc=0; for(const k in counts) if(counts[k]>dc){dc=counts[k];dom=k;}
+ return {score,cause,zmap,status,nAnom,dom};
+}
+CH.forEach(c=>c.an=analyze(c.S));
+
+// ---------- fleet summary ----------
+function renderSummary(){
+ const cnt={N:0,W:0,A:0}; CH.forEach(c=>cnt[c.an.status]++);
+ document.getElementById("summary").innerHTML=
+  `<span class="pill n">정상 ${cnt.N}</span><span class="pill w">경고 ${cnt.W}</span>`+
+  `<span class="pill a">이상 ${cnt.A}</span><span class="muted">/ 8 chambers · 임계 score &gt; ${TH} (·신호별 ${K}σ 초과 합산)</span>`;
+}
+
+// ---------- per-chamber anomaly-score chart ----------
+const STC={N:"#3fb950",W:"#e9b872",A:"#e5534b"};
+function drawScoreChart(cv,an){
+ const x=cv.getContext("2d"),W=cv.width,H=cv.height,L=6,Rm=6,Tp=6,Bm=14;
+ x.fillStyle="#0b0f14";x.fillRect(0,0,W,H);
+ const mx=Math.max(TH*2,...an.score)*1.05;
+ const px=i=>L+(i/(N-1))*(W-L-Rm), py=v=>Tp+(H-Tp-Bm)-(v/mx)*(H-Tp-Bm);
+ // anomalous bands
+ x.fillStyle="rgba(229,83,75,.16)";
+ for(let i=0;i<N;i++) if(an.score[i]>TH) x.fillRect(px(i),Tp,(W-L-Rm)/N+0.6,H-Tp-Bm);
+ // threshold
+ x.strokeStyle="#e5534b";x.setLineDash([4,3]);x.beginPath();x.moveTo(L,py(TH));x.lineTo(W-Rm,py(TH));x.stroke();x.setLineDash([]);
+ // score line
+ x.strokeStyle="#e9b872";x.lineWidth=1.3;x.beginPath();
+ for(let i=0;i<N;i++){const yy=py(an.score[i]);i?x.lineTo(px(i),yy):x.moveTo(px(i),yy);}x.stroke();
+ // anomalous points
+ x.fillStyle="#e5534b";for(let i=0;i<N;i++) if(an.score[i]>TH){x.beginPath();x.arc(px(i),py(an.score[i]),1.6,0,6.28);x.fill();}
+ x.fillStyle="#8b949e";x.font="8px sans-serif";x.fillText("anomaly score",4,H-4);
+}
+
+// ---------- grid ----------
+let sel=2;
+function renderGrid(){
+ const grid=document.getElementById("grid"); grid.innerHTML="";
+ CH.forEach((c,idx)=>{
+  const div=document.createElement("div");
+  div.className="ch "+c.an.status+(idx===sel?" sel":"");
+  const st=c.an.status, lab={N:"NORMAL",W:"WARN",A:"ANOMALY"}[st];
+  div.innerHTML=`<div class="chh"><b>${c.cfg.n}</b><span class="badge ${st}">${lab}</span></div>`+
+   `<canvas width="260" height="90"></canvas>`+
+   `<div class="chc"><span>주요 원인: <b style="color:${STC[st]}">${c.an.dom}</b></span><span>이상 ${c.an.nAnom} runs</span></div>`;
+  div.onclick=()=>{sel=idx;renderGrid();renderDetail();};
+  grid.appendChild(div);
+  drawScoreChart(div.querySelector("canvas"),c.an);
+ });
+}
+
+// ---------- detail: contributing signals ----------
+function drawSignal(cv,S,nm,dir){
+ const x=cv.getContext("2d"),W=cv.width,H=cv.height,L=4,Rm=4,Tp=6,Bm=12;
+ const a=S[nm],mu=ref[nm].mu,sg=ref[nm].sg,UCL=mu+K*sg,LCL=mu-K*sg;
+ let lo=Math.min(LCL,...a),hi=Math.max(UCL,...a);const pad=(hi-lo)*0.08;lo-=pad;hi+=pad;
+ const px=i=>L+(i/(N-1))*(W-L-Rm),py=v=>Tp+(H-Tp-Bm)-((v-lo)/(hi-lo))*(H-Tp-Bm);
+ x.fillStyle="#0b0f14";x.fillRect(0,0,W,H);
+ x.strokeStyle="rgba(229,83,75,.55)";x.setLineDash([3,2]);
+ [UCL,LCL].forEach(v=>{x.beginPath();x.moveTo(L,py(v));x.lineTo(W-Rm,py(v));x.stroke();});
+ x.setLineDash([]);x.strokeStyle="rgba(43,179,176,.4)";x.beginPath();x.moveTo(L,py(mu));x.lineTo(W-Rm,py(mu));x.stroke();
+ x.strokeStyle="#9fe7e5";x.lineWidth=1;x.beginPath();
+ for(let i=0;i<N;i++){const yy=py(a[i]);i?x.lineTo(px(i),yy):x.moveTo(px(i),yy);}x.stroke();
+ for(let i=0;i<N;i++){const z=(a[i]-mu)/sg;const bad=dir===0?Math.abs(z)>K:dir*z>K;
+  if(bad){x.fillStyle="#e5534b";x.beginPath();x.arc(px(i),py(a[i]),1.8,0,6.28);x.fill();}}
+}
+function renderDetail(){
+ const c=CH[sel],st=c.an.status,lab={N:"정상",W:"경고(과거 이상)",A:"이상 발생"}[st];
+ let html=`<h2>${c.cfg.n} 상세 — <span style="color:${STC[st]}">${lab}</span></h2>`+
+  `<div class="muted">설정: ${c.cfg.desc} · 주요 이상 신호: <b style="color:${STC[st]}">${c.an.dom}</b> · 이상 ${c.an.nAnom} / ${N} runs</div>`+
+  `<div class="smgrid">`;
+ MON.forEach(([nm,sh,dir])=>{
+  const z=(c.S[nm][N-1]-ref[nm].mu)/ref[nm].sg;
+  const flagged=dir===0?Math.abs(z)>K:dir*z>K;
+  html+=`<div class="sm"><div class="t"><span>${nm}</span><span style="color:${flagged?'#e5534b':'#8b949e'}">z=${z.toFixed(1)}</span></div>`+
+   `<canvas width="320" height="86"></canvas></div>`;
+ });
+ html+=`</div><div class="muted" style="margin-top:8px">빨강 점 = 기준(${K}σ) 초과 · 점선 = UCL/LCL · 청록선 = 기준 평균 (CH1 정상 baseline)</div>`;
+ const d=document.getElementById("detail");d.innerHTML=html;
+ const cvs=d.querySelectorAll("canvas");
+ MON.forEach(([nm,sh,dir],k)=>drawSignal(cvs[k],c.S,nm,dir));
+}
+
+document.getElementById("note").innerHTML=
+ "이상감지 방식: 7개 장비/공정 센서(H₂O·O₂·기판온도·호스트율·도펀트율·도핑·구동전압)를 정상 기준(CH1 전체)의 평균·σ로 정규화하여 "+
+ "각 신호의 "+K+"σ 초과량을 합산한 다변량 anomaly score를 만든다. score가 임계("+TH+")를 넘으면 해당 run을 이상으로 표시하고, "+
+ "기여가 가장 큰 신호를 ‘주요 원인’으로 진단한다. 실측 라인에서는 합성 데이터 블록을 EES/FDC 로그로 교체하면 그대로 동작한다.";
+
+renderSummary(); renderGrid(); renderDetail();
+</script>
+</body>
+</html>
