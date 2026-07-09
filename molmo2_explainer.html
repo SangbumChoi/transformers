@@ -19,7 +19,7 @@ button:hover{border-color:var(--teal)}
 </head>
 <body>
 <div class="stage">
- <canvas id="cv" width="960" height="540"></canvas>
+ <canvas id="cv" width="1280" height="720"></canvas>
  <div class="ctrl">
   <button id="pp">⏸ Pause</button><button id="prev">« Prev</button><button id="next">Next »</button>
   <button id="replay">⟲ Replay</button><div class="dots" id="dots"></div>
@@ -28,7 +28,7 @@ button:hover{border-color:var(--teal)}
 </div>
 <script>
 "use strict";
-const cv=document.getElementById("cv"), g=cv.getContext("2d"), W=cv.width, H=cv.height;
+const cv=document.getElementById("cv"), g=cv.getContext("2d"), CW=cv.width, CH=cv.height, W=960, H=540;
 const C={bg:"#0b0e14",ink:"#e9edf3",mut:"#8b95a6",acc:"#ff5a5f",teal:"#37c6c0",amber:"#f0b849",blue:"#5aa0ff",vio:"#a889ff",grn:"#5ad18a",panel:"#121826",line:"#2a3242"};
 const RECORD=new URLSearchParams(location.search).get("record")==="1";
 const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
@@ -131,15 +131,16 @@ const scenes=[
 {dur:5, en:"Molmo 2 · Ai2 — point at what matters.", draw(p){const s=ease(seg(p,.05,.4));txt("Molmo 2",W/2,240,64,C.ink);g.globalAlpha=s;txt("point at what matters.",W/2,290,22,C.teal);g.globalAlpha=1;point(W/2,360,C.acc,(p*1.1)%1);txt("Ai2 · Allen Institute for AI",W/2,420,14,C.mut,"center",false);}}
 ];
 
+const DUR=[10.4, 9.4, 13.5, 14.4, 16.0, 12.0, 12.6, 18.4, 14.0, 11.5, 10.1, 14.8, 12.8, 6.8]; if(Array.isArray(DUR)) scenes.forEach((s,i)=>{if(DUR[i])s.dur=DUR[i];});
 const TOTAL=scenes.reduce((a,s)=>a+s.dur,0);window.__total=TOTAL;window.__finished=false;
 let t0=performance.now(),paused=false,jump=null;
 function curScene(el){let acc=0;for(let i=0;i<scenes.length;i++){if(el<acc+scenes[i].dur)return[i,(el-acc)/scenes[i].dur];acc+=scenes[i].dur;}return[scenes.length-1,1];}
 function drawHeader(idx){g.fillStyle=C.panel;g.fillRect(0,0,W,40);g.fillStyle=C.acc;g.beginPath();g.arc(24,20,6,0,7);g.fill();txt("Ai2 · Molmo 2 — explainer",44,25,15,C.ink,"left");txt((idx+1)+" / "+scenes.length,W-16,25,13,C.mut,"right",false);}
-function drawNarr(sc){txt(sc.en,W/2,478,20,C.ink);}
-function drawProg(el){const y=512,x=40,w=W-80;g.strokeStyle=C.line;g.lineWidth=4;g.beginPath();g.moveTo(x,y);g.lineTo(x+w,y);g.stroke();g.strokeStyle=C.teal;g.beginPath();g.moveTo(x,y);g.lineTo(x+w*(el/TOTAL),y);g.stroke();}
+function drawNarr(sc){txt(sc.en,W/2,500,22,C.ink);}
+function drawProg(el){const y=522,x=40,w=W-80;g.strokeStyle=C.line;g.lineWidth=4;g.beginPath();g.moveTo(x,y);g.lineTo(x+w,y);g.stroke();g.strokeStyle=C.teal;g.beginPath();g.moveTo(x,y);g.lineTo(x+w*(el/TOTAL),y);g.stroke();}
 function frame(now){let el;if(jump!==null){t0=now-jump*1000;jump=null;}el=paused?(window.__pausedEl||0):(now-t0)/1000;if(!paused)window.__pausedEl=el;
  if(el>=TOTAL){if(RECORD){window.__finished=true;el=TOTAL-0.01;}else{t0=now;el=0;}}
- const [idx,p]=curScene(clamp(el,0,TOTAL-.001));g.fillStyle=C.bg;g.fillRect(0,0,W,H);drawHeader(idx);g.save();scenes[idx].draw(clamp(p));g.restore();drawNarr(scenes[idx]);drawProg(el);
+ const [idx,p]=curScene(clamp(el,0,TOTAL-.001));g.setTransform(CW/W,0,0,CH/H,0,0);g.fillStyle=C.bg;g.fillRect(0,0,W,H);drawHeader(idx);g.save();scenes[idx].draw(clamp(p));g.restore();drawNarr(scenes[idx]);drawProg(el);g.setTransform(1,0,0,1,0,0);
  [...dotsEl.children].forEach((d,i)=>d.className="dot"+(i===idx?" on":""));requestAnimationFrame(frame);}
 const dotsEl=document.getElementById("dots");
 scenes.forEach((s,i)=>{const d=document.createElement("div");d.className="dot";d.onclick=()=>{let acc=0;for(let k=0;k<i;k++)acc+=scenes[k].dur;jump=acc;paused=false;pp.textContent="⏸ Pause";};dotsEl.appendChild(d);});
