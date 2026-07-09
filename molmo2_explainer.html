@@ -47,8 +47,15 @@ function tabletop(ox,oy,sc){g.save();g.translate(ox,oy);g.scale(sc,sc);
  g.fillStyle="rgba(0,0,0,.35)";g.beginPath();g.ellipse(210,200,180,26,0,0,7);g.fill();
  g.fillStyle="#1c2433";rr(10,150,390,70,8);g.fill();g.fillStyle="#3a4a63";rr(40,120,90,30,4);g.fill();g.fillStyle="#526687";rr(40,116,90,8,3);g.fill();
  g.fillStyle="#20304a";rr(300,110,44,80,8);g.fill();g.fillStyle="#33507a";rr(305,116,34,60,4);g.fill();
- const cups=[[160,130],[210,120],[255,132]];cups.forEach(([x,y])=>{g.fillStyle="#c9d3e6";rr(x,y,34,44,6);g.fill();g.fillStyle="#e9edf3";g.beginPath();g.ellipse(x+17,y+3,17,6,0,0,7);g.fill();g.strokeStyle="#c9d3e6";g.lineWidth=4;g.beginPath();g.arc(x+40,y+18,10,-1.1,1.1);g.stroke();});
- g.restore();return cups.map(([x,y])=>[ox+(x+17)*sc,oy+(y+18)*sc]);}
+ const cups=[[156,124],[206,114],[252,128]];cups.forEach(([x,y])=>{const w=32,h=46;
+  g.strokeStyle="#e7ecf5";g.lineWidth=5;g.beginPath();g.arc(x+w+3,y+h*0.52,9,-1.25,1.25);g.stroke();
+  g.fillStyle="#e7ecf5";rr(x,y+3,w,h-3,5);g.fill();
+  g.fillStyle="rgba(20,26,38,.16)";rr(x+w*0.63,y+5,w*0.35,h-8,4);g.fill();
+  g.fillStyle="#cfd8e6";g.beginPath();g.ellipse(x+w/2,y+3,w/2,5,0,0,7);g.fill();
+  g.fillStyle="#3a2a20";g.beginPath();g.ellipse(x+w/2,y+3,w/2-4,3.3,0,0,7);g.fill();});
+ g.restore();return cups.map(([x,y])=>[ox+(x+16)*sc,oy+(y+24)*sc]);}
+function drawBG(){const rg=g.createRadialGradient(W/2,H*0.40,50,W/2,H*0.5,W*0.72);rg.addColorStop(0,"#131a29");rg.addColorStop(1,"#080b11");g.fillStyle=rg;g.fillRect(0,0,W,H);
+ g.fillStyle="rgba(255,255,255,.020)";for(let y=58;y<H-24;y+=27)for(let x=26;x<W;x+=27){g.beginPath();g.arc(x,y,1,0,7);g.fill();}}
 function mic(x,y,s,col){g.save();g.translate(x,y);g.scale(s,s);g.fillStyle=col;rr(-9,-26,18,30,9);g.fill();g.strokeStyle=col;g.lineWidth=3;g.beginPath();g.arc(0,-11,15,.3,Math.PI-.3);g.stroke();g.beginPath();g.moveTo(0,4);g.lineTo(0,16);g.moveTo(-10,16);g.lineTo(10,16);g.stroke();g.restore();}
 function wave(x,y,w,ph,amp){g.strokeStyle=C.teal;g.lineWidth=2;g.beginPath();for(let i=0;i<=40;i++){const t=i/40,xx=x+t*w,a=amp*Math.sin(t*20-ph)*Math.sin(t*Math.PI);g.lineTo(xx,y-a);}g.stroke();}
 function cursor(x,y){g.fillStyle="#fff";g.beginPath();g.moveTo(x,y);g.lineTo(x,y+16);g.lineTo(x+4,y+12);g.lineTo(x+7,y+18);g.lineTo(x+9,y+17);g.lineTo(x+6,y+11);g.lineTo(x+11,y+11);g.closePath();g.fill();g.strokeStyle="#111";g.lineWidth=1;g.stroke();}
@@ -137,13 +144,13 @@ const scenes=[
  if(s2>0){g.globalAlpha=s2;box(510,180,320,64,"Stage 2 · supervised fine-tuning","points, counts, docs, QA…",C.amber);g.globalAlpha=1;}
  g.globalAlpha=seg(p,.85,1);txt("no RLHF — just open data and two simple stages on pretrained parts",W/2,320,15,C.mut,"center",false);g.globalAlpha=1;}},
 
-{dur:10, en:"Molmo 2 (2025): pointing + tracking in real VIDEO — where AND when.", draw(p){
+{dur:10, en:"Molmo 2 (2025): it POINTS at objects in video and tracks them in time.", draw(p){
  const fx=210,fy=95,fw=540,fh=250,t=clamp(seg(p,.12,.9),0,1);
  const c=street(fx,fy,fw,fh,t);
  for(let k=1;k<=6;k++){const tt=clamp(t-k*0.05,0,1);const px=fx+fw*(0.14+0.72*tt),py=fy+fh*0.78;g.globalAlpha=0.13*(7-k);g.fillStyle=C.acc;g.beginPath();g.arc(px,py,3,0,7);g.fill();g.globalAlpha=1;}
- g.strokeStyle=C.acc;g.lineWidth=2;g.strokeRect(c[0]-38*c[2],c[1]-30*c[2],76*c[2],46*c[2]);
- point(c[0],c[1]-14*c[2],C.acc,0);txt("car",c[0],c[1]-34*c[2],12,C.acc);
- txt("tracking: “the car” · a point + box follow it through every frame",W/2,375,15,C.mut,"center",false);
+ g.globalAlpha=0.20;g.fillStyle=C.acc;g.beginPath();g.ellipse(c[0],c[1]-3*c[2],40*c[2],24*c[2],0,0,7);g.fill();g.globalAlpha=1;
+ point(c[0],c[1]-12*c[2],C.acc,0);txt("point",c[0],c[1]-34*c[2],12,C.acc);
+ txt("a POINT follows “the car” · the mask is derived with SAM 2 — Molmo never emits a box",W/2,375,14,C.mut,"center",false);
  const tl=t;g.strokeStyle=C.line;g.lineWidth=4;g.beginPath();g.moveTo(fx,405);g.lineTo(fx+fw,405);g.stroke();g.strokeStyle=C.acc;g.beginPath();g.moveTo(fx,405);g.lineTo(fx+fw*tl,405);g.stroke();
  txt("t = "+(tl*3.2).toFixed(1)+" s",fx+fw+8,409,12,C.mut,"left",false);}},
 
@@ -182,7 +189,7 @@ const scenes=[
 {dur:6, en:"Molmo 2 · Ai2 — point at what matters.", draw(p){const s=ease(seg(p,.05,.4));txt("Molmo 2",W/2,240,64,C.ink);g.globalAlpha=s;txt("point at what matters.",W/2,290,22,C.teal);g.globalAlpha=1;point(W/2,360,C.acc,(p*1.1)%1);txt("Ai2 · Allen Institute for AI",W/2,420,14,C.mut,"center",false);}}
 ];
 
-const DUR=[10.2, 9.2, 13.0, 20.1, 16.4, 11.8, 22.9, 29.4, 17.5, 17.6, 11.3, 9.9, 14.9, 27.8, 12.6, 6.6]; if(Array.isArray(DUR)) scenes.forEach((s,i)=>{if(DUR[i])s.dur=DUR[i];});
+const DUR=[10.2, 9.2, 13.0, 20.1, 16.4, 11.8, 22.9, 29.4, 17.5, 23.1, 11.3, 9.9, 14.9, 27.8, 12.6, 6.6]; if(Array.isArray(DUR)) scenes.forEach((s,i)=>{if(DUR[i])s.dur=DUR[i];});
 const TOTAL=scenes.reduce((a,s)=>a+s.dur,0);window.__total=TOTAL;window.__finished=false;
 let t0=performance.now(),paused=false,jump=null;
 function curScene(el){let acc=0;for(let i=0;i<scenes.length;i++){if(el<acc+scenes[i].dur)return[i,(el-acc)/scenes[i].dur];acc+=scenes[i].dur;}return[scenes.length-1,1];}
@@ -191,7 +198,9 @@ function drawNarr(sc){txt(sc.en,W/2,500,22,C.ink);}
 function drawProg(el){const y=522,x=40,w=W-80;g.strokeStyle=C.line;g.lineWidth=4;g.beginPath();g.moveTo(x,y);g.lineTo(x+w,y);g.stroke();g.strokeStyle=C.teal;g.beginPath();g.moveTo(x,y);g.lineTo(x+w*(el/TOTAL),y);g.stroke();}
 function frame(now){let el;if(jump!==null){t0=now-jump*1000;jump=null;}el=paused?(window.__pausedEl||0):(now-t0)/1000;if(!paused)window.__pausedEl=el;
  if(el>=TOTAL){if(RECORD){window.__finished=true;el=TOTAL-0.01;}else{t0=now;el=0;}}
- const [idx,p]=curScene(clamp(el,0,TOTAL-.001));g.setTransform(CW/W,0,0,CH/H,0,0);g.fillStyle=C.bg;g.fillRect(0,0,W,H);drawHeader(idx);g.save();scenes[idx].draw(clamp(p));g.restore();drawNarr(scenes[idx]);drawProg(el);g.setTransform(1,0,0,1,0,0);
+ const [idx,p]=curScene(clamp(el,0,TOTAL-.001));g.setTransform(CW/W,0,0,CH/H,0,0);drawBG();drawHeader(idx);g.save();scenes[idx].draw(clamp(p));g.restore();drawNarr(scenes[idx]);drawProg(el);
+ const fd=p<0.05?1-p/0.05:(p>0.97?(p-0.97)/0.03:0);if(fd>0){g.globalAlpha=fd*0.92;g.fillStyle="#05070c";g.fillRect(0,0,W,H);g.globalAlpha=1;}
+ g.setTransform(1,0,0,1,0,0);
  [...dotsEl.children].forEach((d,i)=>d.className="dot"+(i===idx?" on":""));requestAnimationFrame(frame);}
 const dotsEl=document.getElementById("dots");
 scenes.forEach((s,i)=>{const d=document.createElement("div");d.className="dot";d.onclick=()=>{let acc=0;for(let k=0;k<i;k++)acc+=scenes[k].dur;jump=acc;paused=false;pp.textContent="⏸ Pause";};dotsEl.appendChild(d);});
