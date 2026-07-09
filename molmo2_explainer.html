@@ -13,7 +13,7 @@ html,body{margin:0;height:100%;background:#05070c;color:var(--ink);font-family:-
 .ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center}
 button{background:#161b26;color:var(--ink);border:1px solid #2a3242;border-radius:8px;padding:7px 13px;font-size:13px;cursor:pointer}
 button:hover{border-color:var(--teal)}
-.dots{display:flex;gap:6px}.dot{width:9px;height:9px;border-radius:50%;background:#2a3242;cursor:pointer}.dot.on{background:var(--teal)}
+.dots{display:flex;gap:6px}.dot{width:8px;height:8px;border-radius:50%;background:#2a3242;cursor:pointer}.dot.on{background:var(--teal)}
 .hint{color:var(--mut);font-size:12px}
 </style>
 </head>
@@ -42,7 +42,9 @@ function arrow(x1,y1,x2,y2,col){g.strokeStyle=col;g.lineWidth=2;g.beginPath();g.
  const a=Math.atan2(y2-y1,x2-x1);g.fillStyle=col;g.beginPath();g.moveTo(x2,y2);g.lineTo(x2-9*Math.cos(a-.4),y2-9*Math.sin(a-.4));g.lineTo(x2-9*Math.cos(a+.4),y2-9*Math.sin(a+.4));g.closePath();g.fill();}
 function box(x,y,w,h,label,sub,col,alpha=1){g.globalAlpha=alpha;g.fillStyle="#0d1320";rr(x,y,w,h,10);g.fill();g.strokeStyle=col;g.lineWidth=1.6;rr(x,y,w,h,10);g.stroke();
  txt(label,x+w/2,y+h/2-(sub?6:-5),14,C.ink);if(sub)txt(sub,x+w/2,y+h/2+13,10.5,C.mut,"center",false);g.globalAlpha=1;}
-function tabletop(ox,oy,sc){g.save();g.translate(ox,oy);g.scale(sc,sc);g.fillStyle="#0d1320";rr(-10,-10,420,250,14);g.fill();
+function tabletop(ox,oy,sc){g.save();g.translate(ox,oy);g.scale(sc,sc);
+ g.fillStyle="#0d1320";rr(-10,-10,420,250,14);g.fill();
+ g.fillStyle="rgba(0,0,0,.35)";g.beginPath();g.ellipse(210,200,180,26,0,0,7);g.fill();
  g.fillStyle="#1c2433";rr(10,150,390,70,8);g.fill();g.fillStyle="#3a4a63";rr(40,120,90,30,4);g.fill();g.fillStyle="#526687";rr(40,116,90,8,3);g.fill();
  g.fillStyle="#20304a";rr(300,110,44,80,8);g.fill();g.fillStyle="#33507a";rr(305,116,34,60,4);g.fill();
  const cups=[[160,130],[210,120],[255,132]];cups.forEach(([x,y])=>{g.fillStyle="#c9d3e6";rr(x,y,34,44,6);g.fill();g.fillStyle="#e9edf3";g.beginPath();g.ellipse(x+17,y+3,17,6,0,0,7);g.fill();g.strokeStyle="#c9d3e6";g.lineWidth=4;g.beginPath();g.arc(x+40,y+18,10,-1.1,1.1);g.stroke();});
@@ -50,88 +52,137 @@ function tabletop(ox,oy,sc){g.save();g.translate(ox,oy);g.scale(sc,sc);g.fillSty
 function mic(x,y,s,col){g.save();g.translate(x,y);g.scale(s,s);g.fillStyle=col;rr(-9,-26,18,30,9);g.fill();g.strokeStyle=col;g.lineWidth=3;g.beginPath();g.arc(0,-11,15,.3,Math.PI-.3);g.stroke();g.beginPath();g.moveTo(0,4);g.lineTo(0,16);g.moveTo(-10,16);g.lineTo(10,16);g.stroke();g.restore();}
 function wave(x,y,w,ph,amp){g.strokeStyle=C.teal;g.lineWidth=2;g.beginPath();for(let i=0;i<=40;i++){const t=i/40,xx=x+t*w,a=amp*Math.sin(t*20-ph)*Math.sin(t*Math.PI);g.lineTo(xx,y-a);}g.stroke();}
 function cursor(x,y){g.fillStyle="#fff";g.beginPath();g.moveTo(x,y);g.lineTo(x,y+16);g.lineTo(x+4,y+12);g.lineTo(x+7,y+18);g.lineTo(x+9,y+17);g.lineTo(x+6,y+11);g.lineTo(x+11,y+11);g.closePath();g.fill();g.strokeStyle="#111";g.lineWidth=1;g.stroke();}
+// ---- realistic street "video frame" ----
+function car(x,y,s,col){g.save();g.translate(x,y);g.scale(s,s);
+ g.fillStyle="rgba(0,0,0,.4)";g.beginPath();g.ellipse(0,12,40,7,0,0,7);g.fill();
+ g.fillStyle=col;rr(-34,-12,68,20,7);g.fill();rr(-22,-26,46,18,7);g.fill();
+ g.fillStyle="#0a0d12";g.beginPath();g.arc(-20,9,8,0,7);g.fill();g.beginPath();g.arc(20,9,8,0,7);g.fill();
+ g.fillStyle="#39424f";g.beginPath();g.arc(-20,9,4,0,7);g.fill();g.beginPath();g.arc(20,9,4,0,7);g.fill();
+ g.fillStyle="#a9d6ec";rr(-18,-23,18,12,3);g.fill();rr(4,-23,15,12,3);g.fill();
+ g.fillStyle="#ffe08a";g.beginPath();g.arc(33,-1,3.4,0,7);g.fill();g.fillStyle="#ff6b6b";g.beginPath();g.arc(-33,-1,2.6,0,7);g.fill();
+ g.restore();}
+function street(ox,oy,w,h,t){g.save();rr(ox,oy,w,h,8);g.clip();
+ const hz=oy+h*0.5;
+ let sky=g.createLinearGradient(0,oy,0,hz);sky.addColorStop(0,"#1a2440");sky.addColorStop(1,"#3a3355");
+ g.fillStyle=sky;g.fillRect(ox,oy,w,hz-oy);
+ // buildings
+ g.fillStyle="#0e131d";for(let i=0;i<7;i++){const bx=ox+i*(w/7),bh=30+((i*53)%40);g.fillRect(bx,hz-bh,w/7-6,bh);
+  g.fillStyle="#f0d060";for(let wy=0;wy<3;wy++)for(let wx=0;wx<3;wx++){if(((i*7+wx*3+wy)%3)===0)g.fillRect(bx+6+wx*10,hz-bh+6+wy*10,5,6);}g.fillStyle="#0e131d";}
+ // road
+ let road=g.createLinearGradient(0,hz,0,oy+h);road.addColorStop(0,"#2b2f37");road.addColorStop(1,"#141619");
+ g.fillStyle=road;g.beginPath();g.moveTo(ox+w*0.44,hz);g.lineTo(ox+w*0.56,hz);g.lineTo(ox+w,oy+h);g.lineTo(ox,oy+h);g.closePath();g.fill();
+ // sidewalks
+ g.fillStyle="#20242c";g.beginPath();g.moveTo(ox,oy+h);g.lineTo(ox+w*0.44,hz);g.lineTo(ox+w*0.40,hz);g.lineTo(ox-40,oy+h);g.closePath();g.fill();
+ g.beginPath();g.moveTo(ox+w,oy+h);g.lineTo(ox+w*0.56,hz);g.lineTo(ox+w*0.60,hz);g.lineTo(ox+w+40,oy+h);g.closePath();g.fill();
+ // lane dashes
+ g.strokeStyle="#c9cf58";for(let k=0;k<6;k++){const f=k/6,f2=(k+.5)/6;const y1=hz+(oy+h-hz)*f*f,y2=hz+(oy+h-hz)*f2*f2;g.lineWidth=1+4*f;g.beginPath();g.moveTo(ox+w/2,y1);g.lineTo(ox+w/2,y2);g.stroke();}
+ // crosswalk
+ g.fillStyle="rgba(220,225,235,.55)";for(let k=0;k<6;k++){const yy=oy+h*0.82;g.fillRect(ox+w*0.30+k*w*0.07,yy,w*0.045,10);}
+ // pedestrian
+ g.fillStyle="#d9d2c0";g.beginPath();g.arc(ox+w*0.24,oy+h*0.7,6,0,7);g.fill();rr(ox+w*0.24-5,oy+h*0.7+5,10,20,4);g.fill();
+ // car driving left->right along the near lane
+ const cx=ox+w*(0.14+0.72*t), cy=oy+h*0.78, sc=0.7+0.5*t;
+ car(cx,cy,sc,"#4f9dff");
+ g.restore();g.strokeStyle=C.line;g.lineWidth=1.4;rr(ox,oy,w,h,8);g.stroke();
+ return [cx,cy,sc];}
 
 const CAP="A wooden table holds three white ceramic mugs, a closed hardcover book, and a dark smartphone lying face-up.".split(" ");
 
 const scenes=[
-{dur:5, en:"Molmo 2 — teaching AI to point, in video.", draw(p){txt("Ai2 · Allen Institute for AI",W/2,150,17,C.mut,"center",false);
+{dur:6, en:"Molmo 2 — teaching AI to point, in video.", draw(p){txt("Ai2 · Allen Institute for AI",W/2,150,17,C.mut,"center",false);
  const s=ease(seg(p,.1,.5));txt("Molmo 2",W/2,240,74*(.6+.4*s),C.ink);g.globalAlpha=s;txt("Teaching AI to point — in video",W/2,290,22,C.teal);g.globalAlpha=1;point(W/2,360,C.acc,(p*1.2)%1);}},
 
-{dur:6, en:"Describing an image is not the same as knowing WHERE things are.", draw(p){const c=tabletop(300,120,.62);
+{dur:7, en:"Describing an image is not the same as knowing WHERE things are.", draw(p){const c=tabletop(300,120,.62);
  g.globalAlpha=seg(p,.1,.35);txt("“a few cups on a table”",W/2,110,18,C.ink);g.globalAlpha=1;
  const q=seg(p,.45,.8);if(q>0){g.globalAlpha=q;txt("but… which pixels? where exactly?",W/2,400,18,C.amber);g.globalAlpha=1;txt("?",c[1][0],c[1][1]-26+Math.sin(p*8)*3,40,C.amber);}}},
 
-{dur:7, en:"Molmo (2024): the first fully-open VLM that points at pixels.", draw(p){const c=tabletop(300,110,.62);let n=0;
+{dur:8, en:"Molmo (2024): the first fully-open VLM that points at pixels.", draw(p){const c=tabletop(300,110,.62);let n=0;
  c.forEach((pt,i)=>{const st=.2+i*.18,r=seg(p,st,st+.5);if(r>0){point(pt[0],pt[1],C.acc,Math.min(1,r*1.8));if(r>.15)n++;}});
  if(n>0)txt("×"+n+" cups",W/2,110,22,C.teal);g.globalAlpha=seg(p,.8,1);txt("a point lets it count, refer, and ground language to pixels",W/2,405,15,C.mut,"center",false);g.globalAlpha=1;}},
 
-{dur:6.5, en:"Its real edge wasn’t the model — it was the DATA.", draw(p){
- const a=ease(seg(p,.1,.45));g.globalAlpha=a;txt("Most “open” VLMs quietly DISTILL a closed model",W/2,190,20,C.ink);txt("(train on GPT-4V outputs)",W/2,220,15,C.mut,"center",false);g.globalAlpha=1;
- const b=ease(seg(p,.5,.9));if(b>0){g.globalAlpha=b;txt("Molmo refused. It built PixMo —",W/2,300,22,C.teal);txt("real human data, no proprietary VLM in the loop.",W/2,332,18,C.ink);g.globalAlpha=1;}}},
+{dur:8, en:"Its real edge: no proprietary VISION model ever labels the image.", draw(p){
+ const a=ease(seg(p,.1,.45));g.globalAlpha=a;txt("Most “open” VLMs DISTILL a closed model",W/2,180,20,C.ink);txt("(train on GPT-4V looking at the image)",W/2,210,15,C.mut,"center",false);g.globalAlpha=1;
+ const b=ease(seg(p,.5,.9));if(b>0){g.globalAlpha=b;txt("Molmo’s PixMo: the visual labels come from HUMANS —",W/2,300,20,C.teal);txt("no vision-language model in the loop.",W/2,330,18,C.ink);g.globalAlpha=1;}}},
 
-{dur:8.5, en:"PixMo-Cap: annotators DESCRIBE each image out loud for 60–90 s.", draw(p){
- tabletop(70,150,.42);mic(300,250,1.6+.15*Math.sin(p*18),C.acc);wave(340,250,260,p*22,26+14*Math.abs(Math.sin(p*9)));
- const nw=Math.floor(seg(p,.25,.95)*CAP.length);g.textAlign="left";g.font='400 15px sans-serif';g.fillStyle=C.ink;
- let line="",yy=350,xx=120;for(let i=0;i<nw;i++){const wd=CAP[i]+" ";if(g.measureText(line+wd).width>720){g.fillText(line,xx,yy);line="";yy+=24;}line+=wd;}g.fillText(line,xx,yy);
- g.globalAlpha=seg(p,.8,1);txt("speech → dense, un-gameable captions — not typed, not GPT",W/2,470-0,15,C.mut,"center",false);g.globalAlpha=1;
- txt("PixMo-Cap",120,150,18,C.teal,"left");}},
+{dur:9, en:"PixMo-Cap: humans DESCRIBE each image aloud; a text-only LLM tidies it.", draw(p){
+ tabletop(60,150,.40);mic(290,250,1.6+.15*Math.sin(p*18),C.acc);wave(330,250,250,p*22,26+14*Math.abs(Math.sin(p*9)));
+ const nw=Math.floor(seg(p,.25,.9)*CAP.length);g.textAlign="left";g.font='400 15px sans-serif';g.fillStyle=C.ink;
+ let line="",yy=345,xx=110;for(let i=0;i<nw;i++){const wd=CAP[i]+" ";if(g.measureText(line+wd).width>760){g.fillText(line,xx,yy);line="";yy+=24;}line+=wd;}g.fillText(line,xx,yy);
+ g.globalAlpha=seg(p,.78,1);txt("speech → transcript → a language-only LLM cleans it (never sees the image)",W/2,470,14,C.mut,"center",false);g.globalAlpha=1;txt("PixMo-Cap",110,150,18,C.teal,"left");}},
 
-{dur:7, en:"PixMo-Points: humans click every instance — pointing & counting.", draw(p){const c=tabletop(300,110,.62);
+{dur:8, en:"PixMo-Points: humans click every instance — cheap, real grounding.", draw(p){const c=tabletop(300,110,.62);
  const order=[0,2,1];let shown=0;order.forEach((oi,k)=>{const st=.15+k*.2,r=seg(p,st,st+.45);if(r>0){const pt=c[oi];
   if(r<1){const cx=pt[0]-40+40*ease(r),cy=pt[1]-40+40*ease(r);cursor(cx,cy);}point(pt[0],pt[1],C.acc,Math.min(1,r*1.8));if(r>.3)shown++;}});
- if(shown)txt("count = "+shown,W/2,110,22,C.teal);g.globalAlpha=seg(p,.82,1);txt("cheap to annotate → huge REAL grounding dataset",W/2,405,15,C.mut,"center",false);g.globalAlpha=1;txt("PixMo-Points",640,150,18,C.acc,"left");}},
+ if(shown)txt("count = "+shown,W/2,110,22,C.teal);g.globalAlpha=seg(p,.82,1);txt("points are fast to annotate → a huge REAL grounding dataset",W/2,405,15,C.mut,"center",false);g.globalAlpha=1;txt("PixMo-Points",640,150,18,C.acc,"left");}},
 
-{dur:8.5, en:"The PixMo family — many data types, all without distillation.", draw(p){
- const fam=[["PixMo-Cap","dense captions (speech)",C.teal],["PixMo-CapQA","Q&A from captions",C.blue],["PixMo-AskAnything","free-form image Q&A",C.vio],
-  ["PixMo-Points","2D pointing",C.acc],["PixMo-Count","counting by pointing",C.amber],["PixMo-Docs","charts · docs · diagrams",C.grn],["PixMo-Clocks","reading analog clocks",C.mut]];
- fam.forEach((f,i)=>{const s=ease(seg(p,.08+i*.1,.45+i*.1));if(s<=0)return;const col=i%4,row=Math.floor(i/4);const x=90+col*205,y=140+row*130;g.globalAlpha=s;
-  box(x,y,185,105,f[0],"",f[2]);txt(f[1],x+92,y+70,11,C.mut,"center",false);g.globalAlpha=1;});
- g.globalAlpha=seg(p,.85,1);txt("every task supervised by real human or in-house data",W/2,415,15,C.mut,"center",false);g.globalAlpha=1;}},
+{dur:9, en:"The PixMo family — human-grounded, and augmented by text-only LLMs.", draw(p){
+ const fam=[["PixMo-Cap","speech captions (human)",C.teal],["PixMo-Points","human 2D clicks",C.acc],["PixMo-Count","counting by pointing",C.amber],
+  ["PixMo-CapQA","Q&A: LLM from captions",C.blue],["PixMo-AskAnything","annotator + text LLM",C.vio],["PixMo-Docs","synthetic charts/docs",C.grn]];
+ fam.forEach((f,i)=>{const s=ease(seg(p,.08+i*.11,.5+i*.11));if(s<=0)return;const col=i%3,row=Math.floor(i/3);const x=150+col*230,y=140+row*135;g.globalAlpha=s;
+  box(x,y,205,110,f[0],"",f[2]);txt(f[1],x+102,y+72,11.5,C.mut,"center",false);g.globalAlpha=1;});
+ g.globalAlpha=seg(p,.85,1);txt("no VLM distillation — but text-only LLMs generate Q&A and synthetic docs",W/2,420,14,C.mut,"center",false);g.globalAlpha=1;}},
 
-{dur:9, en:"How Molmo is trained: caption pre-training, then fine-tuning.", draw(p){const y=160,h=64;
- box(60,y,140,h,"multi-crop image","high-res tiles",C.blue,ease(seg(p,.05,.28)));if(seg(p,.26,.3)>0)arrow(202,y+h/2,232,y+h/2,C.mut);
- box(234,y,120,h,"ViT encoder","CLIP / SigLIP",C.teal,ease(seg(p,.26,.46)));if(seg(p,.46,.5)>0)arrow(356,y+h/2,386,y+h/2,C.mut);
- box(388,y,120,h,"connector","pool → LLM",C.mut,ease(seg(p,.46,.64)));if(seg(p,.64,.68)>0)arrow(510,y+h/2,540,y+h/2,C.mut);
- box(542,y,120,h,"LLM","OLMo / Qwen",C.vio,ease(seg(p,.64,.82)));
- const s1=ease(seg(p,.3,.6)),s2=ease(seg(p,.62,.95));
- if(s1>0){g.globalAlpha=s1;box(120,300,320,60,"Stage 1 · caption pre-training","learn to describe from PixMo-Cap",C.teal);g.globalAlpha=1;}
- if(s2>0){g.globalAlpha=s2;box(500,300,340,60,"Stage 2 · supervised fine-tuning","the PixMo mixture: points, counts, docs, clocks…",C.amber);g.globalAlpha=1;}
- g.globalAlpha=seg(p,.9,1);txt("no RLHF, no distillation — just open data + two simple stages",W/2,415,15,C.mut,"center",false);g.globalAlpha=1;}},
+{dur:9, en:"An honest caveat: it is NOT trained from scratch.", draw(p){const y=170,h=64;
+ box(90,y,200,h,"pretrained VISION","CLIP → SigLIP 2 (frozen-ish)",C.teal,ease(seg(p,.1,.4)));
+ box(390,y,180,h,"NEW connector","the only fresh weights",C.amber,ease(seg(p,.35,.6)));
+ box(670,y,200,h,"pretrained LLM","OLMo / Qwen (2·3)",C.vio,ease(seg(p,.55,.8)));
+ g.globalAlpha=seg(p,.7,1);txt("the novelty is the DATA + recipe — the backbones are pretrained",W/2,300,17,C.ink);
+ txt("“open” is a spectrum: the -O (OLMo) variant is fully-open lineage;",W/2,340,15,C.mut,"center",false);
+ txt("the Qwen-based ones use open-WEIGHT (not open-DATA) backbones",W/2,364,15,C.mut,"center",false);g.globalAlpha=1;}},
 
-{dur:9, en:"Molmo 2 (2025): pointing + tracking across VIDEO — with time.", draw(p){const fx=90,fw=150,gap=16,y=150,fh=100,nF=5;
- for(let i=0;i<nF;i++){const x=fx+i*(fw+gap),active=seg(p,.15+i*.13,.15+i*.13+.5)>0;g.globalAlpha=active?1:.35;g.fillStyle="#0d1320";rr(x,y,fw,fh,6);g.fill();g.strokeStyle=active?C.teal:C.line;rr(x,y,fw,fh,6);g.stroke();
-  const bx=x+30+i*18,by=y+30+Math.sin(i*1.2)*20;g.fillStyle="#5aa0ff";g.beginPath();g.arc(bx,by,12,0,7);g.fill();const r=seg(p,.15+i*.13,.15+i*.13+.4);if(r>0)point(bx,by,C.acc,Math.min(1,r*1.6));txt("t"+(i+1),x+fw/2,y+fh+16,11,C.mut,"center",false);g.globalAlpha=1;}
- g.globalAlpha=seg(p,.8,1);txt("video pointing · temporal grounding · object tracking",W/2,330,17,C.teal);txt("‘where AND when’ the action happens",W/2,360,14,C.mut,"center",false);g.globalAlpha=1;
- const tl=seg(p,.15,.9);g.strokeStyle=C.line;g.lineWidth=3;g.beginPath();g.moveTo(fx,400);g.lineTo(fx+(nF-1)*(fw+gap)+fw,400);g.stroke();g.strokeStyle=C.acc;g.beginPath();g.moveTo(fx,400);g.lineTo(fx+tl*((nF-1)*(fw+gap)+fw),400);g.stroke();}},
+{dur:9, en:"Training: caption pre-training, then fine-tuning on the PixMo mixture.", draw(p){
+ const s1=ease(seg(p,.1,.5)),s2=ease(seg(p,.5,.9));
+ if(s1>0){g.globalAlpha=s1;box(140,180,300,64,"Stage 1 · caption pre-training","learn to describe (PixMo-Cap)",C.teal);g.globalAlpha=1;}
+ if(seg(p,.48,.52)>0)arrow(445,212,505,212,C.mut);
+ if(s2>0){g.globalAlpha=s2;box(510,180,320,64,"Stage 2 · supervised fine-tuning","points, counts, docs, QA…",C.amber);g.globalAlpha=1;}
+ g.globalAlpha=seg(p,.85,1);txt("no RLHF — just open data and two simple stages on pretrained parts",W/2,320,15,C.mut,"center",false);g.globalAlpha=1;}},
 
-{dur:8, en:"Architecture: SigLIP 2 vision → connector → Qwen3 / OLMo.", draw(p){const y=155,h=68;
+{dur:10, en:"Molmo 2 (2025): pointing + tracking in real VIDEO — where AND when.", draw(p){
+ const fx=210,fy=95,fw=540,fh=250,t=clamp(seg(p,.12,.9),0,1);
+ const c=street(fx,fy,fw,fh,t);
+ for(let k=1;k<=6;k++){const tt=clamp(t-k*0.05,0,1);const px=fx+fw*(0.14+0.72*tt),py=fy+fh*0.78;g.globalAlpha=0.13*(7-k);g.fillStyle=C.acc;g.beginPath();g.arc(px,py,3,0,7);g.fill();g.globalAlpha=1;}
+ g.strokeStyle=C.acc;g.lineWidth=2;g.strokeRect(c[0]-38*c[2],c[1]-30*c[2],76*c[2],46*c[2]);
+ point(c[0],c[1]-14*c[2],C.acc,0);txt("car",c[0],c[1]-34*c[2],12,C.acc);
+ txt("tracking: “the car” · a point + box follow it through every frame",W/2,375,15,C.mut,"center",false);
+ const tl=t;g.strokeStyle=C.line;g.lineWidth=4;g.beginPath();g.moveTo(fx,405);g.lineTo(fx+fw,405);g.stroke();g.strokeStyle=C.acc;g.beginPath();g.moveTo(fx,405);g.lineTo(fx+fw*tl,405);g.stroke();
+ txt("t = "+(tl*3.2).toFixed(1)+" s",fx+fw+8,409,12,C.mut,"left",false);}},
+
+{dur:8, en:"Architecture: SigLIP 2 vision → connector → Qwen3 / OLMo.", draw(p){const y=165,h=68;
  box(60,y,148,h,"Video / images","frames",C.blue,ease(seg(p,.05,.3)));if(seg(p,.28,.32)>0)arrow(210,y+h/2,242,y+h/2,C.mut);
  box(244,y,138,h,"SigLIP 2","vision encoder",C.teal,ease(seg(p,.28,.5)));if(seg(p,.5,.54)>0)arrow(384,y+h/2,416,y+h/2,C.mut);
  box(418,y,128,h,"Connector","vision→LLM",C.mut,ease(seg(p,.5,.7)));if(seg(p,.7,.74)>0)arrow(548,y+h/2,580,y+h/2,C.mut);
  box(582,y,150,h,"Qwen3 / OLMo","8B · 4B · 7B",C.vio,ease(seg(p,.7,.9)));
- const s=ease(seg(p,.85,1));if(s>0){arrow(732,y+h/2,766,y+h/2,C.mut);g.globalAlpha=s;["text answers","points (x,y)","tracks over time"].forEach((o,i)=>txt("• "+o,774,y+18+i*24,14,[C.ink,C.acc,C.amber][i],"left"));g.globalAlpha=1;}
- g.globalAlpha=seg(p,.9,1);txt("upgraded backbone + video encoding + temporal grounding",W/2,410,15,C.mut,"center",false);g.globalAlpha=1;}},
+ const s=ease(seg(p,.85,1));if(s>0){arrow(732,y+h/2,766,y+h/2,C.mut);g.globalAlpha=s;["text answers","points (x,y)","tracks over time"].forEach((o,i)=>txt("• "+o,774,y+18+i*24,14,[C.ink,C.acc,C.amber][i],"left"));g.globalAlpha=1;}}},
 
-{dur:7.5, en:"An 8B that beats last year’s 72B — and Gemini 3 on tracking.", draw(p){const bars=[["InternVL3.5-8B",54.1,C.mut],["Qwen3-VL-8B",59.5,C.blue],["Molmo 2-8B",63.1,C.acc]];const base=380,maxH=210;
+{dur:8, en:"An 8B that beats last year’s 72B — and Gemini 3 on tracking.", draw(p){const bars=[["InternVL3.5-8B",54.1,C.mut],["Qwen3-VL-8B",59.5,C.blue],["Molmo 2-8B",63.1,C.acc]];const base=380,maxH=210;
  bars.forEach((b,i)=>{const s=ease(seg(p,.15+i*.15,.6+i*.15)),hh=(b[1]/70)*maxH*s,x=200+i*160;g.fillStyle=b[2];rr(x,base-hh,110,hh,6);g.fill();txt(b[0],x+55,base+20,12,C.mut,"center",false);if(s>.6)txt(b[1].toFixed(1),x+55,base-hh-8,16,b[2]);});
  txt("avg. of 15 image + video benchmarks",W/2,120,13,C.mut,"center",false);g.globalAlpha=seg(p,.75,1);txt("8B > last year’s Molmo 72B · #1 open on video tracking",W/2,415,16,C.teal);g.globalAlpha=1;}},
 
-{dur:8, en:"The frontier: MolmoPoint — point by selecting visual tokens.", draw(p){const gx=140,gy=150,gs=210;g.strokeStyle=C.line;g.lineWidth=1;
- const s1=seg(p,.1,.35),s2=seg(p,.35,.6),s3=seg(p,.6,.85);
+{dur:9, en:"MolmoPoint: pointing as text is clumsy — coordinates cost tokens.", draw(p){
+ const c=tabletop(90,180,.42);point(c[1][0],c[1][1],C.acc,Math.min(1,seg(p,.1,.4)*1.8));
+ const a=ease(seg(p,.2,.5));g.globalAlpha=a;txt("old way: WRITE the point as text",560,180,17,C.ink,"left");
+ g.font='700 22px monospace';g.fillStyle=C.amber;g.textAlign="left";g.fillText("“( x = 412 , y = 287 )”",560,220);g.globalAlpha=1;
+ g.globalAlpha=seg(p,.55,.95);txt("→ the model must learn a coordinate system,",560,270,15,C.mut,"left",false);
+ txt("   and spend many tokens per point.",560,292,15,C.mut,"left",false);g.globalAlpha=1;
+ g.globalAlpha=seg(p,.8,1);txt("MolmoPoint (2026): point by SELECTING visual tokens instead.",W/2,410,16,C.teal);g.globalAlpha=1;}},
+
+{dur:10, en:"Grounding tokens: PATCH → SUBPATCH → LOCATION, coarse to fine.", draw(p){const gx=120,gy=140,gs=210;g.strokeStyle=C.line;g.lineWidth=1;
+ const s1=seg(p,.08,.3),s2=seg(p,.3,.5),s3=seg(p,.5,.7);
  for(let i=0;i<=4;i++){g.beginPath();g.moveTo(gx+i*gs/4,gy);g.lineTo(gx+i*gs/4,gy+gs);g.stroke();g.beginPath();g.moveTo(gx,gy+i*gs/4);g.lineTo(gx+gs,gy+i*gs/4);g.stroke();}
  if(s1>0){g.globalAlpha=s1;g.strokeStyle=C.teal;g.lineWidth=2.5;g.strokeRect(gx+2*gs/4,gy+gs/4,gs/4,gs/4);g.globalAlpha=1;}
  if(s2>0){g.globalAlpha=s2;g.strokeStyle=C.amber;g.lineWidth=2.5;g.strokeRect(gx+2*gs/4+gs/16,gy+gs/4+gs/16,gs/8,gs/8);g.globalAlpha=1;}
  if(s3>0)point(gx+2*gs/4+gs/8,gy+gs/4+gs/8,C.acc,Math.min(1,s3*1.6));
- [["<PATCH>",C.teal,s1],["<SUBPATCH>",C.amber,s2],["<LOCATION>",C.acc,s3]].forEach((t,i)=>{g.globalAlpha=t[2]>0?1:.3;txt(t[0],640,180+i*40,20,t[1],"left");g.globalAlpha=1;});
- txt("coarse → fine · no text coordinates",640,300,14,C.mut,"left",false);g.globalAlpha=seg(p,.85,1);txt("tighter recognition↔pointing · higher sample-efficiency · works on video",W/2,410,14,C.mut,"center",false);g.globalAlpha=1;}},
+ [["<PATCH>","pick a coarse patch",C.teal,s1],["<SUBPATCH>","refine to a ViT sub-patch",C.amber,s2],["<LOCATION>","1 of 9 cells (3×3)",C.acc,s3]].forEach((t,i)=>{g.globalAlpha=t[3]>0?1:.3;txt(t[0],420,170+i*46,20,t[2],"left");txt(t[1],620,170+i*46,13,C.mut,"left",false);g.globalAlpha=1;});
+ g.globalAlpha=seg(p,.72,1);txt("couples recognition ↔ localization · resolution-independent · works on video",W/2,395,14,C.mut,"center",false);
+ txt("PointBench 70.7 · GUI pointing +5 pts · video tracking J&F 62.5 vs 56.7",W/2,420,15,C.teal);g.globalAlpha=1;}},
 
-{dur:6, en:"Fully open — weights, data, code. Next (2026): any-modality + robotics.", draw(p){["Open weights","Open data","Open code","Open eval"].forEach((t,i)=>{const s=ease(seg(p,.1+i*.12,.5+i*.12));if(s<=0)return;const x=180+(i%2)*300,y=150+Math.floor(i/2)*68;g.globalAlpha=s;box(x,y,240,50,t,"",C.teal);g.globalAlpha=1;});
- g.globalAlpha=seg(p,.7,1);txt("2026: one model reasoning across all modalities · robotics · streaming",W/2,400,15,C.amber);g.globalAlpha=1;}},
+{dur:7, en:"Open — weights, data, code. Next (2026): any-modality + robotics.", draw(p){["Open weights","Open data","Open code","Open eval"].forEach((t,i)=>{const s=ease(seg(p,.1+i*.12,.5+i*.12));if(s<=0)return;const x=180+(i%2)*300,y=155+Math.floor(i/2)*66;g.globalAlpha=s;box(x,y,240,50,t,"",C.teal);g.globalAlpha=1;});
+ g.globalAlpha=seg(p,.7,1);txt("2026: one model reasoning across every modality · robotics · streaming",W/2,400,15,C.amber);g.globalAlpha=1;}},
 
-{dur:5, en:"Molmo 2 · Ai2 — point at what matters.", draw(p){const s=ease(seg(p,.05,.4));txt("Molmo 2",W/2,240,64,C.ink);g.globalAlpha=s;txt("point at what matters.",W/2,290,22,C.teal);g.globalAlpha=1;point(W/2,360,C.acc,(p*1.1)%1);txt("Ai2 · Allen Institute for AI",W/2,420,14,C.mut,"center",false);}}
+{dur:6, en:"Molmo 2 · Ai2 — point at what matters.", draw(p){const s=ease(seg(p,.05,.4));txt("Molmo 2",W/2,240,64,C.ink);g.globalAlpha=s;txt("point at what matters.",W/2,290,22,C.teal);g.globalAlpha=1;point(W/2,360,C.acc,(p*1.1)%1);txt("Ai2 · Allen Institute for AI",W/2,420,14,C.mut,"center",false);}}
 ];
 
-const DUR=[10.4, 9.4, 13.5, 14.4, 16.0, 12.0, 12.6, 18.4, 14.0, 11.5, 10.1, 14.8, 12.8, 6.8]; if(Array.isArray(DUR)) scenes.forEach((s,i)=>{if(DUR[i])s.dur=DUR[i];});
+const DUR=[10.2, 9.2, 13.0, 20.1, 16.4, 11.8, 22.9, 29.4, 17.5, 17.6, 11.3, 9.9, 14.9, 27.8, 12.6, 6.6]; if(Array.isArray(DUR)) scenes.forEach((s,i)=>{if(DUR[i])s.dur=DUR[i];});
 const TOTAL=scenes.reduce((a,s)=>a+s.dur,0);window.__total=TOTAL;window.__finished=false;
 let t0=performance.now(),paused=false,jump=null;
 function curScene(el){let acc=0;for(let i=0;i<scenes.length;i++){if(el<acc+scenes[i].dur)return[i,(el-acc)/scenes[i].dur];acc+=scenes[i].dur;}return[scenes.length-1,1];}
