@@ -1,0 +1,208 @@
+[
+  {
+    "config": "vision_all",
+    "test_acc": 0.9,
+    "single_acc": 0.7143,
+    "spatial_acc": 1.0,
+    "errors": {
+      "color": 10,
+      "shape": 0,
+      "relation": 0,
+      "format": 0
+    },
+    "n_test": 100,
+    "examples": [
+      {
+        "gt": "forestgreen sphere",
+        "pred": "green sphere",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "brown square",
+        "pred": "chocolate square",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "gold cross",
+        "pred": "khaki cross",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "gold diamond",
+        "pred": "ochre diamond",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "salmon hexagon",
+        "pred": "apricot hexagon",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "cyan ellipse",
+        "pred": "turquoise ellipse",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "sapphire trapezoid",
+        "pred": "cobalt trapezoid",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "turquoise cube",
+        "pred": "cyan cube",
+        "errs": [
+          "color"
+        ]
+      }
+    ]
+  },
+  {
+    "config": "language_all",
+    "test_acc": 0.86,
+    "single_acc": 0.6,
+    "spatial_acc": 1.0,
+    "errors": {
+      "color": 13,
+      "shape": 1,
+      "relation": 0,
+      "format": 0
+    },
+    "n_test": 100,
+    "examples": [
+      {
+        "gt": "forestgreen sphere",
+        "pred": "green sphere",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "gold cross",
+        "pred": "ochre cross",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "gold diamond",
+        "pred": "ochre diamond",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "navy diamond",
+        "pred": "navy square",
+        "errs": [
+          "shape"
+        ]
+      },
+      {
+        "gt": "emerald pyramid",
+        "pred": "jade pyramid",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "salmon hexagon",
+        "pred": "apricot hexagon",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "cyan ellipse",
+        "pred": "turquoise ellipse",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "sapphire trapezoid",
+        "pred": "cobalt trapezoid",
+        "errs": [
+          "color"
+        ]
+      }
+    ]
+  },
+  {
+    "config": "all_both",
+    "test_acc": 0.93,
+    "single_acc": 0.8,
+    "spatial_acc": 1.0,
+    "errors": {
+      "color": 7,
+      "shape": 0,
+      "relation": 0,
+      "format": 0
+    },
+    "n_test": 100,
+    "examples": [
+      {
+        "gt": "gold cross",
+        "pred": "khaki cross",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "gold diamond",
+        "pred": "ochre diamond",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "salmon hexagon",
+        "pred": "apricot hexagon",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "cyan ellipse",
+        "pred": "turquoise ellipse",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "sapphire trapezoid",
+        "pred": "cobalt trapezoid",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "crimson star",
+        "pred": "ruby star",
+        "errs": [
+          "color"
+        ]
+      },
+      {
+        "gt": "turquoise cube",
+        "pred": "cyan cube",
+        "errs": [
+          "color"
+        ]
+      }
+    ]
+  }
+]
