@@ -1,0 +1,22 @@
+[
+  {
+    "n_train": 50,
+    "train_acc_sub": 1.0,
+    "test_acc": 0.73
+  },
+  {
+    "n_train": 500,
+    "train_acc_sub": 1.0,
+    "test_acc": 0.8
+  },
+  {
+    "n_train": 1500,
+    "train_acc_sub": 1.0,
+    "test_acc": 0.86
+  },
+  {
+    "n_train": 5000,
+    "train_acc_sub": 0.91,
+    "test_acc": 0.93
+  }
+]
